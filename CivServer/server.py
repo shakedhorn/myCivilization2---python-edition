@@ -14,12 +14,22 @@ class GameServer:
         self.create_initial_map(20, 20)
 
     def create_initial_map(self, w, h):
+        self.game.map = []
         for y in range(h):
             row = []
             for x in range(w):
-                terrain = "plains"
-                if y <= 1 or y >= h - 2: terrain = "snow"
-                elif x == 0 or x == w - 1: terrain = "ocean"
+                is_polar = (y <= 1 or y >= h - 2)
+                # Earth probability: ~71% water, 29% land
+                if random.random() < 0.71:
+                    terrain = random.choices(["ocean", "coast"], weights=[80, 20])[0]
+                else:
+                    if is_polar:
+                        terrain = random.choices(["snow", "tundra"], weights=[50, 50])[0]
+                    else:
+                        terrain = random.choices(
+                            ["desert", "forest", "grassland", "plains", "hills", "mountains"],
+                            weights=[33, 31, 10, 10, 10, 6]
+                        )[0]
                 row.append({"terrain": terrain, "owner": -1, "improvement": None})
             self.game.map.append(row)
 

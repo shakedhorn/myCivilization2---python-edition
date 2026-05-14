@@ -6,6 +6,19 @@ import time
 import math
 from CivShared.game_defs import GameData
 
+TERRAIN_COLORS = {
+    "grassland": (106, 186, 76),
+    "plains": (200, 180, 100),
+    "desert": (240, 230, 140),
+    "tundra": (180, 200, 200),
+    "snow": (250, 250, 250),
+    "hills": (139, 137, 137),
+    "mountains": (100, 100, 100),
+    "coast": (100, 200, 250),
+    "ocean": (20, 100, 180),
+    "forest": (34, 100, 34)
+}
+
 class CivClient:
     def __init__(self):
         pygame.init()
@@ -24,6 +37,7 @@ class CivClient:
         self.input_text = ""
         self.username = ""
         self.selected_unit_id = None
+        self.selected_city_id = None
         self.camera_x = 0
         self.camera_y = 0
         self.tile_size = 32
@@ -97,16 +111,29 @@ class CivClient:
                     else: self.input_text += event.unicode
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
                     mx, my = pygame.mouse.get_pos()
-                    if self.selected_unit_id:
-                        button_rect = pygame.Rect(10, 600, 180, 50)
-                        if button_rect.collidepoint(mx, my):
-                            self.send_net_msg({"type": "FOUND_CITY", "unit_id": self.selected_unit_id})
-                            continue
+                    
+                    if my >= 600:
+                        # לחיצה על ה-UI
+                        if event.button == 1:
+                            if self.selected_unit_id:
+                                unit = self.game_state["units"].get(self.selected_unit_id)
+                                if unit:
+                                    unit_info = GameData.UNITS.get(unit["type"], {})
+                                    if unit_info.get("name") == "Settler":
+                                        btn_rect = pygame.Rect(250, 620, 150, 40)
+                                        if btn_rect.collidepoint(mx, my):
+                                            self.send_net_msg({"type": "FOUND_CITY", "unit_id": self.selected_unit_id})
+                                    elif unit_info.get("range", 0) > 0:
+                                        btn_rect = pygame.Rect(250, 620, 150, 40)
+                                        if btn_rect.collidepoint(mx, my):
+                                            self.target_mode = not self.target_mode
+                        continue
+                        
                     # המרת קואורדינטות עכבר לאריחי מפה (כולל המצלמה)
                     grid_x = (mx + self.camera_x) // self.tile_size
                     grid_y = (my + self.camera_y) // self.tile_size
-                    if event.button == 1: # קליק שמאלי - בחירת יחידה
-                        if self.target_mode:
+                    if event.button == 1: # קליק שמאלי - בחירה
+                        if self.target_mode and self.selected_unit_id:
                             # אנחנו במצב מטרה - שולחים פקודת התקפה במקום תנועה
                             self.send_net_msg({
                                 "type": "RANGED_ATTACK",
@@ -119,10 +146,19 @@ class CivClient:
                             for uid, unit in self.game_state["units"].items():
                                 if unit["x"] == grid_x and unit["y"] == grid_y and unit["owner"] == self.my_id:
                                     self.selected_unit_id = uid
+                                    self.selected_city_id = None
                                     found_unit = True
                                     print(f"Selected: {uid}")
                             if not found_unit:
                                 self.selected_unit_id = None
+                                found_city = False
+                                for cid, city in self.game_state.get("cities", {}).items():
+                                    if city["x"] == grid_x and city["y"] == grid_y and city["owner"] == self.my_id:
+                                        self.selected_city_id = cid
+                                        found_city = True
+                                        print(f"Selected City: {cid}")
+                                if not found_city:
+                                    self.selected_city_id = None
 
                     elif event.button == 3 and self.selected_unit_id: # קליק ימני - פקודת תנועה/תקיפה
                         self.send_net_msg({
@@ -156,41 +192,65 @@ class CivClient:
                     for x, tile in enumerate(row):
                         screen_x = x * self.tile_size - self.camera_x
                         screen_y = y * self.tile_size - self.camera_y
-                        if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 768:
-                            color = (34, 139, 34) if tile["terrain"] == "plains" else (100, 149, 237)
+                        if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
+                            color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
                             pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
                             pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
+                # ציור ערים
+                for cid, city in self.game_state.get("cities", {}).items():
+                    screen_x = city["x"] * self.tile_size - self.camera_x
+                    screen_y = city["y"] * self.tile_size - self.camera_y
+                    if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
+                        color = (150, 150, 150)
+                        pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
+                        pygame.draw.rect(self.screen, (0, 0, 0), (screen_x, screen_y, self.tile_size, self.tile_size), 2)
+                        if self.selected_city_id == cid:
+                            pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
+
                 for uid, u in self.game_state["units"].items():
                     color = (255, 255, 0) if u["owner"] == self.my_id else (255, 50, 50)
                     pos = (u["x"] * self.tile_size - self.camera_x + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2)
-                    if -32 < pos[0] < 1056 and -32 < pos[1] < 800:
+                    if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
                         pygame.draw.circle(self.screen, color, pos, 15)
                         # סימון יחידה נבחרת בריבוע לבן
                         if self.selected_unit_id == uid:
                             pygame.draw.rect(self.screen, (255, 255, 255), (u["x"]*self.tile_size - self.camera_x, u["y"]*self.tile_size - self.camera_y, self.tile_size, self.tile_size), 2)
 
+                # ציור ה-UI התחתון
+                ui_rect = pygame.Rect(0, 600, 1024, 168)
+                pygame.draw.rect(self.screen, (40, 40, 50), ui_rect)
+                pygame.draw.rect(self.screen, (100, 100, 120), ui_rect, 4)
+
                 if self.selected_unit_id:
                     unit = self.game_state["units"].get(self.selected_unit_id)
                     if unit:
                         unit_info = GameData.UNITS.get(unit["type"], {})
-                        if unit_info["name"] == "Settler":
-                            # ציור כפתור פשוט בצד
-                            rect = pygame.Rect(10, 600, 150, 40)
-                            pygame.draw.rect(self.screen, (200, 200, 200), rect)
-                            txt = self.font_small.render("Found City (B)", True, (0, 0, 0))
-                            self.screen.blit(txt, (20, 610))
-                            # בדיקה אם לחצו על המקש B
-                            if pygame.key.get_pressed()[pygame.K_b] or (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and rect.collidepoint(pygame.mouse.get_pos())):
+                        name = unit_info.get("name", "Unknown Unit")
+                        hp = unit.get("hp", 100)
+                        self.screen.blit(self.font_main.render(name, True, (255, 255, 255)), (20, 620))
+                        self.screen.blit(self.font_small.render(f"HP: {hp}/100", True, (200, 200, 200)), (20, 660))
+                        
+                        if unit_info.get("name") == "Settler":
+                            btn_rect = pygame.Rect(250, 620, 150, 40)
+                            pygame.draw.rect(self.screen, (200, 200, 200), btn_rect)
+                            self.screen.blit(self.font_small.render("Found City (B)", True, (0, 0, 0)), (260, 630))
+                            if pygame.key.get_pressed()[pygame.K_b]:
                                 self.send_net_msg({"type": "FOUND_CITY", "unit_id": self.selected_unit_id})
-                        elif unit_info["range"] > 0:
-                            btn_rect = pygame.Rect(10, 550, 150, 40)
+                        elif unit_info.get("range", 0) > 0:
+                            btn_rect = pygame.Rect(250, 620, 150, 40)
                             pygame.draw.rect(self.screen, (200, 50, 50) if self.target_mode else (100, 100, 100), btn_rect)
-                            self.screen.blit(self.font_small.render("Target (R)", True, (255,255,255)), (20, 558))
-                            
-                            # לחיצה על R תפעיל את מצב המטרה
+                            self.screen.blit(self.font_small.render("Target (R)", True, (255,255,255)), (260, 630))
                             if pygame.key.get_pressed()[pygame.K_r]:
                                 self.target_mode = True
+
+                elif self.selected_city_id:
+                    city = self.game_state.get("cities", {}).get(self.selected_city_id)
+                    if city:
+                        name = city.get("name", "City")
+                        hp = city.get("hp", 200)
+                        self.screen.blit(self.font_main.render(name, True, (255, 255, 255)), (20, 620))
+                        self.screen.blit(self.font_small.render(f"HP: {hp}/200", True, (200, 200, 200)), (20, 660))
 
             pygame.display.flip()
         pygame.quit()
