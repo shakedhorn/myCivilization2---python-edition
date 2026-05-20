@@ -38,6 +38,7 @@ class CivClient:
         self.username = ""
         self.selected_unit_id = None
         self.selected_city_id = None
+        self.camera_x = 0
         self.camera_y = 0
         self.tile_size = 32
         self.target_mode = False
@@ -103,38 +104,61 @@ class CivClient:
                             except: self.input_text = "ERROR: IP:PORT"
                         elif self.state == "LOGIN":
                             self.username = self.input_text
+                            # שולחים לוגין לשרת הבסיס
                             self.sock.sendall(json.dumps({"type": "LOGIN", "user": self.username}).encode())
-                            resp = json.loads(self.sock.recv(1024).decode())
-                            if resp["status"] == "LOGIN_OK":
-                                self.games_list = resp.get("games", [])
-                                self.state = "LOBBY"
-                                self.input_text = ""
+                            
+                            resp_raw = self.sock.recv(1024)
+                            if resp_raw:
+                                resp = json.loads(resp_raw.decode())
+                                if resp["status"] == "LOGIN_OK":
+                                    self.games_list = resp.get("games", [])
+                                    self.state = "LOBBY"
+                                    self.input_text = ""
+                                    self.sock.close() 
+                            else:
+                                self.input_text = "ERROR: SERVER DISCONNECTED"
                         elif self.state == "LOBBY":
                             game_name = self.input_text
-                            if game_name in self.games_list:
-                                self.sock.sendall(json.dumps({"type": "JOIN_GAME", "name": game_name}).encode())
-                            else:
-                                self.sock.sendall(json.dumps({"type": "CREATE_GAME", "name": game_name}).encode())
                             
-                            resp = json.loads(self.sock.recv(1024).decode())
-                            if resp.get("status") == "JOIN_SUCCESS":
-                                port = resp["port"]
-                                self.sock.close()
-                                
-                                # Connect to game server
+                            try:
+                                # 1. פתיחת סוקט חדש מול שרת הבסיס כי הקודם נסגר
                                 self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                self.sock.connect((self.server_ip, port))
+                                self.sock.connect((self.server_ip, 54321)) # תמיד להתחבר לפורט הראשי של השרת בסיס
                                 
-                                # Login to game server
-                                self.sock.sendall(json.dumps({"type": "LOGIN", "user": self.username}).encode())
-                                game_resp = json.loads(self.sock.recv(1024).decode())
+                                # 2. שליחת הבקשה (יצירה או הצטרפות)
+                                if game_name in self.games_list:
+                                    self.sock.sendall(json.dumps({"type": "JOIN_GAME", "name": game_name}).encode())
+                                else:
+                                    self.sock.sendall(json.dumps({"type": "CREATE_GAME", "name": game_name}).encode())
                                 
-                                if game_resp.get("status") == "LOGIN_OK":
-                                    self.my_id = str(game_resp["id"])
-                                    self.state = "GAME"
-                                    threading.Thread(target=self.network_loop, daemon=True).start()
-                            else:
-                                self.input_text = "ERROR: " + resp.get("message", "FAILED")
+                                # 3. קבלת הפורט של שרת המשחק הייעודי
+                                resp = json.loads(self.sock.recv(1024).decode())
+                                
+                                if resp.get("status") == "JOIN_SUCCESS":
+                                    port = resp["port"]
+                                    self.sock.close()  # סוגרים את החיבור לשרת הבסיס, סיימנו איתו
+                                    
+                                    # 4. מתחברים לשרת המשחק האמיתי שנוצר (הפורט החדש שקיבלנו)
+                                    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    self.sock.connect((self.server_ip, port))
+                                    
+                                    # 5. התחברות (Login) לשרת המשחק
+                                    self.sock.sendall(json.dumps({"type": "LOGIN", "user": self.username}).encode())
+                                    game_resp = json.loads(self.sock.recv(1024).decode())
+                                    
+                                    if game_resp.get("status") == "LOGIN_OK":
+                                        self.my_id = str(game_resp["id"])
+                                        self.state = "GAME"
+                                        # מעכשיו הסוקט נשאר פתוח קבוע והרשת רצה ברקע
+                                        threading.Thread(target=self.network_loop, daemon=True).start()
+                                else:
+                                    self.input_text = "ERROR: " + resp.get("message", "FAILED")
+                                    self.sock.close()
+                                    
+                            except Exception as e:
+                                self.input_text = f"CONN ERROR: {e}"
+                        else:
+                            self.input_text = "ERROR: " + resp.get("message", "FAILED")
                     elif event.key == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
                     else: self.input_text += event.unicode
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
