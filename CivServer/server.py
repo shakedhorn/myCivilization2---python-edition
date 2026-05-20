@@ -6,7 +6,8 @@ from CivShared.game_defs import *
 from CivServer.game_logic import GameState
 
 class GameServer:
-    def __init__(self):
+    def __init__(self, port=54321):
+        self.port = port
         self.clients = {}
         self.game = GameState(width=20, height=20)
         self.lock = threading.Lock()
@@ -93,12 +94,12 @@ class GameServer:
         finally:
             conn.close()
 
-    def start(self, port=54321):
+    def start(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(('0.0.0.0', port))
+        server.bind(('0.0.0.0', self.port))
         server.listen()
-        print(f"Server started on port {port}")
+        print(f"Game Server started on port {self.port}")
         while True:
             conn, addr = server.accept()
             threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()

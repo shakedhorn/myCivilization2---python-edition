@@ -38,11 +38,12 @@ class CivClient:
         self.username = ""
         self.selected_unit_id = None
         self.selected_city_id = None
-        self.camera_x = 0
         self.camera_y = 0
         self.tile_size = 32
         self.target_mode = False
         self.start_time = time.time()
+        self.games_list = []
+        self.server_ip = ""
 
     def send_net_msg(self, msg_dict):
         if not self.sock: return
@@ -94,6 +95,7 @@ class CivClient:
                         if self.state == "CONNECT":
                             try:
                                 ip, port = self.input_text.split(":")
+                                self.server_ip = ip
                                 self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                                 self.sock.connect((ip, int(port)))
                                 self.state = "LOGIN"
@@ -104,9 +106,35 @@ class CivClient:
                             self.sock.sendall(json.dumps({"type": "LOGIN", "user": self.username}).encode())
                             resp = json.loads(self.sock.recv(1024).decode())
                             if resp["status"] == "LOGIN_OK":
-                                self.my_id = str(resp["id"])
-                                self.state = "GAME"
-                                threading.Thread(target=self.network_loop, daemon=True).start()
+                                self.games_list = resp.get("games", [])
+                                self.state = "LOBBY"
+                                self.input_text = ""
+                        elif self.state == "LOBBY":
+                            game_name = self.input_text
+                            if game_name in self.games_list:
+                                self.sock.sendall(json.dumps({"type": "JOIN_GAME", "name": game_name}).encode())
+                            else:
+                                self.sock.sendall(json.dumps({"type": "CREATE_GAME", "name": game_name}).encode())
+                            
+                            resp = json.loads(self.sock.recv(1024).decode())
+                            if resp.get("status") == "JOIN_SUCCESS":
+                                port = resp["port"]
+                                self.sock.close()
+                                
+                                # Connect to game server
+                                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                self.sock.connect((self.server_ip, port))
+                                
+                                # Login to game server
+                                self.sock.sendall(json.dumps({"type": "LOGIN", "user": self.username}).encode())
+                                game_resp = json.loads(self.sock.recv(1024).decode())
+                                
+                                if game_resp.get("status") == "LOGIN_OK":
+                                    self.my_id = str(game_resp["id"])
+                                    self.state = "GAME"
+                                    threading.Thread(target=self.network_loop, daemon=True).start()
+                            else:
+                                self.input_text = "ERROR: " + resp.get("message", "FAILED")
                     elif event.key == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
                     else: self.input_text += event.unicode
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
@@ -175,16 +203,32 @@ class CivClient:
                 self.draw_text_centered("Shaked Horn & Benjamin Zimerman", 400, self.font_main, (200, 200, 200))
                 if time.time() - self.start_time > 3: self.state = "CONNECT"
             
-            elif self.state == "CONNECT" or self.state == "LOGIN":
+            elif self.state in ["CONNECT", "LOGIN", "LOBBY"]:
                 # רקע דמוי משחק (כחול עמוק)
                 pygame.draw.rect(self.screen, (30, 60, 100), (0, 0, 1024, 768))
-                title = "SERVER CONNECTION" if self.state == "CONNECT" else "PLAYER LOGIN"
-                subtitle = "Enter IP:PORT" if self.state == "CONNECT" else "Enter Username"
+                
+                if self.state == "CONNECT":
+                    title = "SERVER CONNECTION"
+                    subtitle = "Enter IP:PORT"
+                elif self.state == "LOGIN":
+                    title = "PLAYER LOGIN"
+                    subtitle = "Enter Username"
+                else:
+                    title = "GAME LOBBY"
+                    subtitle = "Enter Game Name (Join/Create)"
                 
                 self.draw_minecraft_box(312, 284, 400, 200, title)
                 input_surf = self.font_main.render(self.input_text + "|", True, (255, 255, 255))
                 self.screen.blit(input_surf, (332, 360))
                 self.draw_text_centered(subtitle, 330, self.font_small, (150, 150, 150), shadow=False)
+                
+                if self.state == "LOBBY":
+                    # Show active games
+                    y_offset = 500
+                    self.draw_text_centered("Active Games:", y_offset, self.font_small, (255, 255, 0))
+                    for g in self.games_list:
+                        y_offset += 30
+                        self.draw_text_centered(g, y_offset, self.font_small, (200, 200, 200))
 
             elif self.state == "GAME" and self.game_state:
                 # ציור המפה והיחידות (כפי שעשינו קודם)
