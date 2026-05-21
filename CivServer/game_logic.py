@@ -46,13 +46,40 @@ class GameState:
             return self._found_city(player_id, data)
         elif cmd_type == "END_TURN":
             return self._end_turn(player_id)
+        elif cmd_type == "SKIP_UNIT_TURN":
+            return self._skip_unit_turn(player_id, data)
         # כאן יכנסו כל שאר הפקודות (BUILD_BUILDING, ADOPT_CIVIC וכו')
         return False
 
+    def _skip_unit_turn(self, p_id, data):
+        u_id = str(data.get("unit_id"))
+        unit = self.units.get(u_id)
+        if unit and unit["owner"] == p_id and not unit.get("has_moved", False):
+            unit["has_moved"] = True
+            return True
+        return False
+
     def _end_turn(self, p_id):
-        # לוגיקה לבדיקת האם כל השחקנים סיימו תור
-        # אם כן - קידום turn_count ועיבוד ייצור בערים
-        pass
+        if p_id in self.players:
+            self.players[p_id]["ended_turn"] = True
+            
+            # בדיקה האם כולם סיימו
+            if all(p.get("ended_turn", False) for p in self.players.values()):
+                self._next_turn()
+            return True
+        return False
+        
+    def _next_turn(self):
+        self.turn_count += 1
+        for p_id, p in self.players.items():
+            p["ended_turn"] = False
+            p["gold"] += 5
+            p["science"] += 2
+            p["culture"] += 1
+            p["production"] += 3
+            
+        for u in self.units.values():
+            u["has_moved"] = False
 
     def _get_unit_at(self, x, y):
         for uid, unit in self.units.items():
@@ -67,6 +94,7 @@ class GameState:
         if u_id not in self.units: return False
         unit = self.units[u_id]
         if unit["owner"] != p_id: return False
+        if unit.get("has_moved", False): return False
         
         # 1. בדיקת טווח תנועה (פשוט: מרחק 1)
         if abs(unit["x"] - nx) > 1 or abs(unit["y"] - ny) > 1: return False
@@ -99,6 +127,7 @@ class GameState:
 
         # תנועה רגילה
         unit["x"], unit["y"] = nx, ny
+        unit["has_moved"] = True
         return True
 
     def _found_city(self, p_id, data):

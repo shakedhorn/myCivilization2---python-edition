@@ -160,6 +160,9 @@ class CivClient:
                         else:
                             self.input_text = "ERROR: " + resp.get("message", "FAILED")
                     elif event.key == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
+                    elif event.key == pygame.K_SPACE and self.state == "GAME":
+                        if self.selected_unit_id:
+                            self.send_net_msg({"type": "SKIP_UNIT_TURN", "unit_id": self.selected_unit_id})
                     else: self.input_text += event.unicode
                 elif event.type == pygame.MOUSEMOTION and self.state == "GAME":
                     if event.buttons[0] or event.buttons[1] or event.buttons[2]: # Any mouse button held
@@ -171,7 +174,7 @@ class CivClient:
                             map_width = len(self.game_state["map"][0]) * self.tile_size
                             map_height = len(self.game_state["map"]) * self.tile_size
                             max_x = max(0, map_width - 1024)
-                            max_y = max(0, map_height - 600) # Game area is 600px tall
+                            max_y = max(0, map_height - 560) # Game area is 560px tall (600 bottom - 40 top)
                             
                             self.camera_x = max(0, min(self.camera_x, max_x))
                             self.camera_y = max(0, min(self.camera_y, max_y))
@@ -179,12 +182,15 @@ class CivClient:
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
                     mx, my = pygame.mouse.get_pos()
                     
+                    if my < 40:
+                        continue # Ignore clicks on the top UI
+                    
                     if my >= 600:
                         # לחיצה על ה-UI
                         if event.button == 1:
                             if self.selected_unit_id:
                                 unit = self.game_state["units"].get(self.selected_unit_id)
-                                if unit:
+                                if unit and not unit.get("has_moved"):
                                     unit_info = GameData.UNITS.get(unit["type"], {})
                                     if unit_info.get("name") == "Settler":
                                         btn_rect = pygame.Rect(250, 620, 150, 40)
@@ -194,11 +200,21 @@ class CivClient:
                                         btn_rect = pygame.Rect(250, 620, 150, 40)
                                         if btn_rect.collidepoint(mx, my):
                                             self.target_mode = not self.target_mode
+                                            
+                            # End Turn Button logic
+                            me = self.game_state.get("players", {}).get(self.my_id, {})
+                            if not me.get("ended_turn", False):
+                                my_units = [u for u in self.game_state["units"].values() if u["owner"] == self.my_id]
+                                all_moved = all(u.get("has_moved", False) for u in my_units)
+                                if all_moved:
+                                    end_btn_rect = pygame.Rect(800, 620, 180, 50)
+                                    if end_btn_rect.collidepoint(mx, my):
+                                        self.send_net_msg({"type": "END_TURN"})
                         continue
                         
                     # המרת קואורדינטות עכבר לאריחי מפה (כולל המצלמה)
                     grid_x = (mx + self.camera_x) // self.tile_size
-                    grid_y = (my + self.camera_y) // self.tile_size
+                    grid_y = (my - 40 + self.camera_y) // self.tile_size
                     if event.button == 1: # קליק שמאלי - בחירה
                         if self.target_mode and self.selected_unit_id:
                             # אנחנו במצב מטרה - שולחים פקודת התקפה במקום תנועה
@@ -228,11 +244,13 @@ class CivClient:
                                     self.selected_city_id = None
 
                     elif event.button == 3 and self.selected_unit_id: # קליק ימני - פקודת תנועה/תקיפה
-                        self.send_net_msg({
-                            "type": "MOVE_UNIT",
-                            "unit_id": self.selected_unit_id,
-                            "nx": grid_x, "ny": grid_y
-                        })
+                        unit = self.game_state["units"].get(self.selected_unit_id)
+                        if unit and not unit.get("has_moved", False):
+                            self.send_net_msg({
+                                "type": "MOVE_UNIT",
+                                "unit_id": self.selected_unit_id,
+                                "nx": grid_x, "ny": grid_y
+                            })
 
             if self.state == "SPLASH":
                 # אפקט פעימה צבעוני לשם המשחק
@@ -274,7 +292,7 @@ class CivClient:
                 for y, row in enumerate(self.game_state["map"]):
                     for x, tile in enumerate(row):
                         screen_x = x * self.tile_size - self.camera_x
-                        screen_y = y * self.tile_size - self.camera_y
+                        screen_y = y * self.tile_size - self.camera_y + 40
                         if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
                             color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
                             pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
@@ -283,7 +301,7 @@ class CivClient:
                 # ציור ערים
                 for cid, city in self.game_state.get("cities", {}).items():
                     screen_x = city["x"] * self.tile_size - self.camera_x
-                    screen_y = city["y"] * self.tile_size - self.camera_y
+                    screen_y = city["y"] * self.tile_size - self.camera_y + 40
                     if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
                         color = (150, 150, 150)
                         pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
@@ -293,12 +311,24 @@ class CivClient:
 
                 for uid, u in self.game_state["units"].items():
                     color = (255, 255, 0) if u["owner"] == self.my_id else (255, 50, 50)
-                    pos = (u["x"] * self.tile_size - self.camera_x + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2)
+                    if u["owner"] == self.my_id and u.get("has_moved", False):
+                        color = (150, 150, 0) # Darker yellow if moved
+                    pos = (u["x"] * self.tile_size - self.camera_x + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
                     if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
                         pygame.draw.circle(self.screen, color, pos, 15)
                         # סימון יחידה נבחרת בריבוע לבן
                         if self.selected_unit_id == uid:
-                            pygame.draw.rect(self.screen, (255, 255, 255), (u["x"]*self.tile_size - self.camera_x, u["y"]*self.tile_size - self.camera_y, self.tile_size, self.tile_size), 2)
+                            pygame.draw.rect(self.screen, (255, 255, 255), (u["x"]*self.tile_size - self.camera_x, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
+                            
+                # ציור Top UI
+                top_rect = pygame.Rect(0, 0, 1024, 40)
+                pygame.draw.rect(self.screen, (20, 20, 30), top_rect)
+                me = self.game_state.get("players", {}).get(self.my_id, {})
+                turn = self.game_state.get("turn", 1)
+                
+                top_text = f"Turn: {turn}   |   Gold: {me.get('gold',0)}   |   Science: {me.get('science',0)}   |   Culture: {me.get('culture',0)}   |   Production: {me.get('production',0)}"
+                top_surf = self.font_main.render(top_text, True, (255, 255, 255))
+                self.screen.blit(top_surf, (20, 5))
 
                 # ציור ה-UI התחתון
                 ui_rect = pygame.Rect(0, 600, 1024, 168)
@@ -314,18 +344,21 @@ class CivClient:
                         self.screen.blit(self.font_main.render(name, True, (255, 255, 255)), (20, 620))
                         self.screen.blit(self.font_small.render(f"HP: {hp}/100", True, (200, 200, 200)), (20, 660))
                         
-                        if unit_info.get("name") == "Settler":
-                            btn_rect = pygame.Rect(250, 620, 150, 40)
-                            pygame.draw.rect(self.screen, (200, 200, 200), btn_rect)
-                            self.screen.blit(self.font_small.render("Found City (B)", True, (0, 0, 0)), (260, 630))
-                            if pygame.key.get_pressed()[pygame.K_b]:
-                                self.send_net_msg({"type": "FOUND_CITY", "unit_id": self.selected_unit_id})
-                        elif unit_info.get("range", 0) > 0:
-                            btn_rect = pygame.Rect(250, 620, 150, 40)
-                            pygame.draw.rect(self.screen, (200, 50, 50) if self.target_mode else (100, 100, 100), btn_rect)
-                            self.screen.blit(self.font_small.render("Target (R)", True, (255,255,255)), (260, 630))
-                            if pygame.key.get_pressed()[pygame.K_r]:
-                                self.target_mode = True
+                        if not unit.get("has_moved", False):
+                            self.screen.blit(self.font_small.render("Press SPACE to Skip Turn", True, (200, 200, 200)), (20, 690))
+                            
+                            if unit_info.get("name") == "Settler":
+                                btn_rect = pygame.Rect(250, 620, 150, 40)
+                                pygame.draw.rect(self.screen, (200, 200, 200), btn_rect)
+                                self.screen.blit(self.font_small.render("Found City (B)", True, (0, 0, 0)), (260, 630))
+                                if pygame.key.get_pressed()[pygame.K_b]:
+                                    self.send_net_msg({"type": "FOUND_CITY", "unit_id": self.selected_unit_id})
+                            elif unit_info.get("range", 0) > 0:
+                                btn_rect = pygame.Rect(250, 620, 150, 40)
+                                pygame.draw.rect(self.screen, (200, 50, 50) if self.target_mode else (100, 100, 100), btn_rect)
+                                self.screen.blit(self.font_small.render("Target (R)", True, (255,255,255)), (260, 630))
+                                if pygame.key.get_pressed()[pygame.K_r]:
+                                    self.target_mode = True
 
                 elif self.selected_city_id:
                     city = self.game_state.get("cities", {}).get(self.selected_city_id)
@@ -334,6 +367,22 @@ class CivClient:
                         hp = city.get("hp", 200)
                         self.screen.blit(self.font_main.render(name, True, (255, 255, 255)), (20, 620))
                         self.screen.blit(self.font_small.render(f"HP: {hp}/200", True, (200, 200, 200)), (20, 660))
+                        
+                # Draw End Turn button if ready
+                if not me.get("ended_turn", False):
+                    my_units = [u for u in self.game_state["units"].values() if u["owner"] == self.my_id]
+                    units_needing_orders = sum(1 for u in my_units if not u.get("has_moved", False))
+                    if units_needing_orders == 0:
+                        end_btn_rect = pygame.Rect(800, 620, 180, 50)
+                        pygame.draw.rect(self.screen, (50, 200, 50), end_btn_rect)
+                        self.screen.blit(self.font_main.render("END TURN ->", True, (0, 0, 0)), (810, 625))
+                    else:
+                        end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                        pygame.draw.rect(self.screen, (80, 80, 80), end_btn_rect)
+                        pygame.draw.rect(self.screen, (150, 150, 150), end_btn_rect, 2)
+                        self.screen.blit(self.font_small.render(f"Unit needs orders ({units_needing_orders})", True, (200, 200, 200)), (770, 635))
+                else:
+                    self.draw_text_centered("Waiting for everyone to end their turn...", 650, self.font_main, (200, 200, 200), shadow=True)
 
             pygame.display.flip()
         pygame.quit()
