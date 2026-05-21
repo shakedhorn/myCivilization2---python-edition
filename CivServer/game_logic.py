@@ -10,22 +10,61 @@ class GameState:
         self.players = {}  # {player_id: {gold: 100, science: 0, ...}}
         self.units = {}    # {unit_id: {type: 'warrior', x: 5, y: 5, owner: id, hp: 100}}
         self.cities = {}   # {city_id: {name: 'Jerusalem', x: 10, y: 10, owner: id}}
+        self.next_unit_id = 1
+        self.next_city_id = 1
         self.map = self._generate_map()
-        self.unit_counter = 0
 
     def _generate_map(self):
-        # יצירת מפה בסיסית לפי TerrainType שהגדרת
+        # 1. Initialize random grid (45% land)
+        grid = [[1 if random.random() < 0.45 else 0 for _ in range(self.width)] for _ in range(self.height)]
+        
+        # 2. Smooth the grid (Cellular Automata)
+        for _ in range(5):
+            new_grid = [[0 for _ in range(self.width)] for _ in range(self.height)]
+            for y in range(self.height):
+                for x in range(self.width):
+                    land_count = 0
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < self.width and 0 <= ny < self.height:
+                                land_count += grid[ny][nx]
+                    # Tile becomes land if it has >= 5 land neighbors (including itself)
+                    new_grid[y][x] = 1 if land_count >= 5 else 0
+            grid = new_grid
+            
+        # 3. Assign specific biomes
         map_data = []
         for y in range(self.height):
             row = []
             for x in range(self.width):
-                # לוגיקת יצירה בסיסית (אפשר לשכלל בהמשך)
-                choice = random.choices(
-                    ["grassland", "plains", "forest", "mountains", "ocean"],
-                    weights=[40, 30, 15, 5, 10]
-                )[0]
-                row.append({"terrain": choice, "improvement": None, "owner": -1})
+                if grid[y][x] == 1:
+                    # It's land. Distribute biomes.
+                    rand = random.random()
+                    if rand < 0.10: terrain = "mountains"
+                    elif rand < 0.30: terrain = "forest"
+                    elif rand < 0.60: terrain = "plains"
+                    else: terrain = "grassland"
+                else:
+                    # It's water. We'll differentiate coast vs ocean in the next pass.
+                    terrain = "ocean"
+                row.append({"terrain": terrain, "improvement": None, "owner": -1})
             map_data.append(row)
+            
+        # 4. Generate coastlines (shallow water next to land)
+        for y in range(self.height):
+            for x in range(self.width):
+                if map_data[y][x]["terrain"] == "ocean":
+                    is_coast = False
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < self.width and 0 <= ny < self.height:
+                                if map_data[ny][nx]["terrain"] not in ["ocean", "coast"]:
+                                    is_coast = True
+                    if is_coast:
+                        map_data[y][x]["terrain"] = "coast"
+                        
         return map_data
 
     def get_sync_data(self):
@@ -48,8 +87,52 @@ class GameState:
             return self._end_turn(player_id)
         elif cmd_type == "SKIP_UNIT_TURN":
             return self._skip_unit_turn(player_id, data)
+        elif cmd_type == "CHANGE_PRODUCTION":
+            return self._change_production(player_id, data)
+        elif cmd_type == "BUILD_IMPROVEMENT":
+            return self._build_improvement(player_id, data)
         # כאן יכנסו כל שאר הפקודות (BUILD_BUILDING, ADOPT_CIVIC וכו')
         return False
+
+    def _build_improvement(self, p_id, data):
+        u_id = str(data.get("unit_id"))
+        imp_type = data.get("improvement")
+        unit = self.units.get(u_id)
+        if not unit or unit["owner"] != p_id or unit["type"] != "builder": return False
+        
+        if unit.get("charges", 0) <= 0: return False
+        
+        player = self.players.get(p_id)
+        imp_data = GameData.IMPROVEMENTS.get(imp_type, {})
+        req_tech = imp_data.get("required_tech")
+        
+        if req_tech and req_tech not in player.get("techs", []):
+            return False
+            
+        x, y = unit["x"], unit["y"]
+        tile = self.map[y][x]
+        if tile.get("improvement"): return False
+        
+        tile["improvement"] = imp_type
+        unit["charges"] -= 1
+        unit["has_moved"] = True
+        
+        if unit["charges"] <= 0:
+            del self.units[u_id]
+            
+        return True
+
+    def _change_production(self, p_id, data):
+        c_id = data.get("city_id")
+        if c_id not in self.cities: return False
+        city = self.cities[c_id]
+        if city["owner"] != p_id: return False
+        
+        category = data.get("category")
+        item_name = data.get("item")
+        
+        city["production_item"] = {"category": category, "name": item_name}
+        return True
 
     def _skip_unit_turn(self, p_id, data):
         u_id = str(data.get("unit_id"))
@@ -69,14 +152,97 @@ class GameState:
             return True
         return False
         
+    def _calculate_city_yields(self, city):
+        food, prod, gold, science, culture = 0, 0, 0, 0, 0
+        food += 2
+        prod += 1
+        
+        for wx, wy in city.get("worked_tiles", []):
+            if 0 <= wy < self.height and 0 <= wx < self.width:
+                t_type = self.map[wy][wx]["terrain"]
+                imp_type = self.map[wy][wx].get("improvement")
+                
+                t_stats = GameData.TERRAIN.get(t_type, {})
+                food += t_stats.get("food_yield", 0)
+                prod += t_stats.get("production_yield", 0)
+                gold += t_stats.get("gold_yield", 0)
+                
+                if imp_type:
+                    i_stats = GameData.IMPROVEMENTS.get(imp_type, {})
+                    food += i_stats.get("food_bonus", 0)
+                    prod += i_stats.get("production_bonus", 0)
+                    gold += i_stats.get("gold_bonus", 0)
+                
+        for b in city.get("buildings", []):
+            b_stats = GameData.BUILDINGS.get(b, {})
+            prod += b_stats.get("production_bonus", 0)
+            science += b_stats.get("science_bonus", 0)
+            culture += b_stats.get("culture_bonus", 0)
+            
+        return {"food": food, "production": prod, "gold": gold, "science": science, "culture": culture}
+
     def _next_turn(self):
         self.turn_count += 1
         for p_id, p in self.players.items():
             p["ended_turn"] = False
-            p["gold"] += 5
-            p["science"] += 2
-            p["culture"] += 1
-            p["production"] += 3
+            p["last_gold_income"] = 0
+            p["last_science_income"] = 1
+            p["last_culture_income"] = 1
+            
+        for c_id, city in self.cities.items():
+            yields = self._calculate_city_yields(city)
+            city["last_production_yield"] = yields["production"]
+            p_id = city["owner"]
+            if p_id in self.players:
+                self.players[p_id]["last_gold_income"] += yields["gold"]
+                self.players[p_id]["last_science_income"] += yields["science"]
+                self.players[p_id]["last_culture_income"] += yields["culture"]
+                
+        for p_id, p in self.players.items():
+            p["gold"] += p.get("last_gold_income", 0)
+            p["science"] += p.get("last_science_income", 0)
+            p["culture"] += p.get("last_culture_income", 0)
+                
+            city["stored_food"] = city.get("stored_food", 0) + yields["food"]
+            food_needed = 15 + (city.get("population", 1) * 5)
+            if city["stored_food"] >= food_needed:
+                city["population"] += 1
+                city["stored_food"] -= food_needed
+                cx, cy = city["x"], city["y"]
+                opts = []
+                for dx in [-1, 0, 1]:
+                    for dy in [-1, 0, 1]:
+                        nx, ny = cx + dx, cy + dy
+                        if 0 <= nx < self.width and 0 <= ny < self.height and (nx, ny) not in city.get("worked_tiles", []):
+                            opts.append((nx, ny))
+                if opts:
+                    city.setdefault("worked_tiles", []).append(random.choice(opts))
+                    
+            city["stored_production"] = city.get("stored_production", 0) + yields["production"]
+            prod_item = city.get("production_item")
+            if prod_item:
+                cost = 9999
+                if prod_item["category"] == "unit":
+                    cost = GameData.UNITS.get(prod_item["name"], {}).get("production_cost", 9999)
+                elif prod_item["category"] == "building":
+                    cost = GameData.BUILDINGS.get(prod_item["name"], {}).get("production_cost", 9999)
+                    
+                if city["stored_production"] >= cost:
+                    city["stored_production"] -= cost
+                    if prod_item["category"] == "unit":
+                        unit_type = prod_item["name"]
+                        new_unit = {
+                            "type": unit_type, "owner": p_id,
+                            "x": city["x"], "y": city["y"], "hp": 100, "has_moved": False
+                        }
+                        if unit_type == "builder":
+                            new_unit["charges"] = 3
+                        self.units[str(self.next_unit_id)] = new_unit
+                        self.next_unit_id += 1
+                    elif prod_item["category"] == "building":
+                        if prod_item["name"] not in city.get("buildings", []):
+                            city.setdefault("buildings", []).append(prod_item["name"])
+                    city["production_item"] = None
             
         for u in self.units.values():
             u["has_moved"] = False
@@ -138,7 +304,13 @@ class GameState:
             self.cities[city_id] = {
                 "x": unit["x"], "y": unit["y"],
                 "owner": p_id, "hp": 200, "has_walls": False,
-                "name": f"City of Player {p_id}"
+                "name": f"City of Player {p_id}",
+                "population": 1,
+                "stored_food": 0,
+                "stored_production": 0,
+                "production_item": None,
+                "buildings": ["cityCenter"],
+                "worked_tiles": [(unit["x"], unit["y"])]
             }
             del self.units[u_id] # מחיקת המתיישב
             return True

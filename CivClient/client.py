@@ -1,4 +1,5 @@
 import pygame
+import pygame
 import socket
 import json
 import threading
@@ -44,6 +45,7 @@ class CivClient:
         self.target_mode = False
         self.start_time = time.time()
         self.games_list = []
+        self.city_build_scroll_y = 0
         self.server_ip = ""
 
     def send_net_msg(self, msg_dict):
@@ -200,6 +202,24 @@ class CivClient:
                                         btn_rect = pygame.Rect(250, 620, 150, 40)
                                         if btn_rect.collidepoint(mx, my):
                                             self.target_mode = not self.target_mode
+                                    elif unit_info.get("name") == "Builder":
+                                        ux, uy = unit["x"], unit["y"]
+                                        tile = self.game_state["map"][uy][ux]
+                                        t_type = tile["terrain"]
+                                        has_imp = tile.get("improvement") is not None
+                                        charges = unit.get("charges", 0)
+                                        
+                                        if not has_imp and charges > 0:
+                                            possible = []
+                                            if t_type in ["grassland", "plains"]: possible.append(("Farm", "farm"))
+                                            elif t_type in ["hills"]: possible.append(("Mine", "mine"))
+                                            elif t_type in ["coast"]: possible.append(("Fishing Boats", "fishingBoats"))
+                                            
+                                            for idx, (label, imp_id) in enumerate(possible):
+                                                bx = 250 + idx * 150
+                                                btn_rect = pygame.Rect(bx, 620, 140, 40)
+                                                if btn_rect.collidepoint(mx, my):
+                                                    self.send_net_msg({"type": "BUILD_IMPROVEMENT", "unit_id": self.selected_unit_id, "improvement": imp_id})
                                             
                             # End Turn Button logic
                             me = self.game_state.get("players", {}).get(self.my_id, {})
@@ -210,6 +230,32 @@ class CivClient:
                                     end_btn_rect = pygame.Rect(800, 620, 180, 50)
                                     if end_btn_rect.collidepoint(mx, my):
                                         self.send_net_msg({"type": "END_TURN"})
+                        continue
+                        
+                    if self.selected_city_id and mx >= 824 and 40 <= my <= 600:
+                        if event.button == 1:
+                            base_options = [
+                                ("Warrior", "unit", "warrior"),
+                                ("Slinger", "unit", "slinger"),
+                                ("Settler", "unit", "settler"),
+                                ("Builder", "unit", "builder"),
+                                ("Monument", "building", "monument"),
+                                ("Granary", "building", "granary")
+                            ]
+                            city = self.game_state.get("cities", {}).get(self.selected_city_id, {})
+                            options = [o for o in base_options if o[1] != "building" or o[2] not in city.get("buildings", [])]
+                            
+                            for i, (label, cat, internal_name) in enumerate(options):
+                                bx = 834
+                                by = 90 + i * 50 + self.city_build_scroll_y
+                                brect = pygame.Rect(bx, by, 180, 40)
+                                if brect.collidepoint(mx, my):
+                                    self.send_net_msg({
+                                        "type": "CHANGE_PRODUCTION",
+                                        "city_id": self.selected_city_id,
+                                        "category": cat,
+                                        "item": internal_name
+                                    })
                         continue
                         
                     # המרת קואורדינטות עכבר לאריחי מפה (כולל המצלמה)
@@ -251,6 +297,20 @@ class CivClient:
                                 "unit_id": self.selected_unit_id,
                                 "nx": grid_x, "ny": grid_y
                             })
+                            
+                elif event.type == pygame.MOUSEWHEEL and self.state == "GAME":
+                    if self.selected_city_id:
+                        mx, my = pygame.mouse.get_pos()
+                        if mx >= 824 and 40 <= my <= 600:
+                            self.city_build_scroll_y += event.y * 20
+                            self.city_build_scroll_y = min(0, self.city_build_scroll_y)
+                            # Maximum scroll: 6 items * 50px = 300px + 20px padding = 320px height
+                            # Container height is 560px. So we don't actually need to limit scrolling
+                            # negatively unless there are many items. Let's make it robust:
+                            num_items = 6
+                            content_height = num_items * 50 + 20
+                            max_scroll = max(0, content_height - 560)
+                            self.city_build_scroll_y = max(-max_scroll, self.city_build_scroll_y)
 
             if self.state == "SPLASH":
                 # אפקט פעימה צבעוני לשם המשחק
@@ -296,6 +356,13 @@ class CivClient:
                         if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
                             color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
                             pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
+                            
+                            imp = tile.get("improvement")
+                            if imp:
+                                imp_color = (50, 200, 50) if imp == "farm" else (100, 100, 100) if imp in ["mine", "quarry"] else (200, 200, 50) if imp == "pasture" else (0, 150, 200) if imp == "fishingBoats" else (200, 100, 50)
+                                pygame.draw.rect(self.screen, imp_color, (screen_x + 8, screen_y + 8, 16, 16))
+                                pygame.draw.rect(self.screen, (0, 0, 0), (screen_x + 8, screen_y + 8, 16, 16), 1)
+                                
                             pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
                 # ציור ערים
@@ -306,6 +373,24 @@ class CivClient:
                         color = (150, 150, 150)
                         pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
                         pygame.draw.rect(self.screen, (0, 0, 0), (screen_x, screen_y, self.tile_size, self.tile_size), 2)
+                        
+                        b_colors = {
+                            "monument": (100, 100, 255),
+                            "granary": (255, 200, 0),
+                            "library": (0, 255, 255),
+                            "waterMill": (50, 50, 200)
+                        }
+                        buildings = city.get("buildings", [])
+                        b_idx = 0
+                        for b in buildings:
+                            if b == "cityCenter": continue
+                            bc = b_colors.get(b, (200, 200, 200))
+                            bx = screen_x + 2 + (b_idx * 8) % (self.tile_size - 8)
+                            by = screen_y + self.tile_size - 8
+                            pygame.draw.rect(self.screen, bc, (bx, by, 6, 6))
+                            pygame.draw.rect(self.screen, (0, 0, 0), (bx, by, 6, 6), 1)
+                            b_idx += 1
+                            
                         if self.selected_city_id == cid:
                             pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
 
@@ -316,6 +401,12 @@ class CivClient:
                     pos = (u["x"] * self.tile_size - self.camera_x + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
                     if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
                         pygame.draw.circle(self.screen, color, pos, 15)
+                        
+                        u_type = u.get("type", "?")
+                        char_surf = self.font_small.render(u_type[0].upper(), True, (0, 0, 0))
+                        char_rect = char_surf.get_rect(center=pos)
+                        self.screen.blit(char_surf, char_rect)
+                        
                         # סימון יחידה נבחרת בריבוע לבן
                         if self.selected_unit_id == uid:
                             pygame.draw.rect(self.screen, (255, 255, 255), (u["x"]*self.tile_size - self.camera_x, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
@@ -326,7 +417,7 @@ class CivClient:
                 me = self.game_state.get("players", {}).get(self.my_id, {})
                 turn = self.game_state.get("turn", 1)
                 
-                top_text = f"Turn: {turn}   |   Gold: {me.get('gold',0)}   |   Science: {me.get('science',0)}   |   Culture: {me.get('culture',0)}   |   Production: {me.get('production',0)}"
+                top_text = f"Turn: {turn}   |   Gold: {me.get('gold',0)} (+{me.get('last_gold_income',0)})   |   Science: {me.get('science',0)} (+{me.get('last_science_income',0)})   |   Culture: {me.get('culture',0)} (+{me.get('last_culture_income',0)})"
                 top_surf = self.font_main.render(top_text, True, (255, 255, 255))
                 self.screen.blit(top_surf, (20, 5))
 
@@ -359,14 +450,93 @@ class CivClient:
                                 self.screen.blit(self.font_small.render("Target (R)", True, (255,255,255)), (260, 630))
                                 if pygame.key.get_pressed()[pygame.K_r]:
                                     self.target_mode = True
+                            elif unit_info.get("name") == "Builder":
+                                ux, uy = unit["x"], unit["y"]
+                                tile = self.game_state["map"][uy][ux]
+                                t_type = tile["terrain"]
+                                has_imp = tile.get("improvement") is not None
+                                charges = unit.get("charges", 0)
+                                
+                                self.screen.blit(self.font_small.render(f"Charges: {charges}", True, (200, 200, 200)), (150, 660))
+                                
+                                if not has_imp and charges > 0:
+                                    possible = []
+                                    if t_type in ["grassland", "plains"]: possible.append(("Farm", "farm"))
+                                    elif t_type in ["hills"]: possible.append(("Mine", "mine"))
+                                    elif t_type in ["coast"]: possible.append(("Fishing Boats", "fishingBoats"))
+                                    
+                                    for idx, (label, imp_id) in enumerate(possible):
+                                        bx = 250 + idx * 150
+                                        btn_rect = pygame.Rect(bx, 620, 140, 40)
+                                        pygame.draw.rect(self.screen, (200, 200, 200), btn_rect)
+                                        self.screen.blit(self.font_small.render(f"Build {label}", True, (0, 0, 0)), (bx+5, 630))
 
                 elif self.selected_city_id:
                     city = self.game_state.get("cities", {}).get(self.selected_city_id)
                     if city:
                         name = city.get("name", "City")
                         hp = city.get("hp", 200)
-                        self.screen.blit(self.font_main.render(name, True, (255, 255, 255)), (20, 620))
-                        self.screen.blit(self.font_small.render(f"HP: {hp}/200", True, (200, 200, 200)), (20, 660))
+                        pop = city.get("population", 1)
+                        food = city.get("stored_food", 0)
+                        food_needed = 15 + (pop * 5)
+                        prod = city.get("stored_production", 0)
+                        
+                        self.screen.blit(self.font_main.render(f"{name} (Pop {pop})", True, (255, 255, 255)), (20, 610))
+                        self.screen.blit(self.font_small.render(f"HP: {hp}/200  |  Food: {food}/{food_needed}  |  Prod: {prod}", True, (200, 200, 200)), (20, 640))
+                        
+                        prod_item = city.get("production_item")
+                        if prod_item:
+                            item_name = prod_item["name"].capitalize()
+                            cost = 999
+                            if prod_item["category"] == "unit":
+                                cost = GameData.UNITS.get(prod_item["name"], {}).get("production_cost", 999)
+                            elif prod_item["category"] == "building":
+                                cost = GameData.BUILDINGS.get(prod_item["name"], {}).get("production_cost", 999)
+                            city_prod_yield = max(1, city.get("last_production_yield", 1))
+                            turns_left = max(1, math.ceil((cost - prod) / city_prod_yield))
+                            self.screen.blit(self.font_small.render(f"Building: {item_name} ({turns_left} Turns)", True, (150, 255, 150)), (20, 670))
+                        else:
+                            self.screen.blit(self.font_small.render(f"Building: Nothing", True, (255, 150, 150)), (20, 670))
+                            
+                        # Build Menu buttons on the right side
+                        right_rect = pygame.Rect(824, 40, 200, 560)
+                        pygame.draw.rect(self.screen, (40, 40, 50), right_rect)
+                        pygame.draw.rect(self.screen, (100, 100, 120), right_rect, 2)
+                        
+                        base_options = [
+                            ("Warrior", "unit", "warrior"),
+                            ("Slinger", "unit", "slinger"),
+                            ("Settler", "unit", "settler"),
+                            ("Builder", "unit", "builder"),
+                            ("Monument", "building", "monument"),
+                            ("Granary", "building", "granary")
+                        ]
+                        options = [o for o in base_options if o[1] != "building" or o[2] not in city.get("buildings", [])]
+                        
+                        old_clip = self.screen.get_clip()
+                        self.screen.set_clip(right_rect)
+                        
+                        self.screen.blit(self.font_main.render("Production", True, (255, 255, 255)), (834, 45 + self.city_build_scroll_y))
+                        
+                        for i, (label, cat, internal_name) in enumerate(options):
+                            bx = 834
+                            by = 90 + i * 50 + self.city_build_scroll_y
+                            brect = pygame.Rect(bx, by, 180, 40)
+                            
+                            item_cost = 999
+                            if cat == "unit":
+                                item_cost = GameData.UNITS.get(internal_name, {}).get("production_cost", 999)
+                            elif cat == "building":
+                                item_cost = GameData.BUILDINGS.get(internal_name, {}).get("production_cost", 999)
+                            city_prod_yield = max(1, city.get("last_production_yield", 1))
+                            t_left = max(1, math.ceil(item_cost / city_prod_yield))
+                            
+                            color = (50, 150, 50) if prod_item and prod_item["name"] == internal_name else (80, 80, 80)
+                            pygame.draw.rect(self.screen, color, brect)
+                            pygame.draw.rect(self.screen, (200, 200, 200), brect, 1)
+                            self.screen.blit(self.font_small.render(f"{label} ({t_left}T)", True, (255, 255, 255)), (bx + 10, by + 10))
+                            
+                        self.screen.set_clip(old_clip)
                         
                 # Draw End Turn button if ready
                 if not me.get("ended_turn", False):
