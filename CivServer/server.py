@@ -9,10 +9,10 @@ class GameServer:
     def __init__(self, port=54321):
         self.port = port
         self.clients = {}
-        self.game = GameState(width=20, height=20)
+        self.game = GameState(width=60, height=40)
         self.lock = threading.Lock()
         self.next_unit_id = 1
-        self.create_initial_map(20, 20)
+        self.create_initial_map(60, 40)
 
     def create_initial_map(self, w, h):
         self.game.map = []
@@ -54,8 +54,8 @@ class GameServer:
                         }
                         # יצירת Settler התחלתי לשחקן חדש
                         self.game.units[str(self.next_unit_id)] = {
-                            "type": "settler", "owner": player_id, "x": random.randint(2, 17), 
-                            "y": random.randint(2, 17), "hp": 100
+                            "type": "settler", "owner": player_id, "x": random.randint(2, 57), 
+                            "y": random.randint(2, 37), "hp": 100
                         }
                         self.next_unit_id += 1
                 

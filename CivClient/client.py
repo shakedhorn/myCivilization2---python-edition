@@ -161,6 +161,21 @@ class CivClient:
                             self.input_text = "ERROR: " + resp.get("message", "FAILED")
                     elif event.key == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
                     else: self.input_text += event.unicode
+                elif event.type == pygame.MOUSEMOTION and self.state == "GAME":
+                    if event.buttons[0] or event.buttons[1] or event.buttons[2]: # Any mouse button held
+                        self.camera_x -= event.rel[0]
+                        self.camera_y -= event.rel[1]
+                        
+                        # Clamp camera to map bounds
+                        if self.game_state and "map" in self.game_state:
+                            map_width = len(self.game_state["map"][0]) * self.tile_size
+                            map_height = len(self.game_state["map"]) * self.tile_size
+                            max_x = max(0, map_width - 1024)
+                            max_y = max(0, map_height - 600) # Game area is 600px tall
+                            
+                            self.camera_x = max(0, min(self.camera_x, max_x))
+                            self.camera_y = max(0, min(self.camera_y, max_y))
+                            
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
                     mx, my = pygame.mouse.get_pos()
                     
