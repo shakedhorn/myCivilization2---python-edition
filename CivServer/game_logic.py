@@ -3,7 +3,7 @@ import random
 from CivShared.game_defs import GameData, CommandType
 
 class GameState:
-    def __init__(self, width=36, height=28):
+    def __init__(self, width=50, height=36):
         self.width = width
         self.height = height
         self.turn_count = 1
@@ -15,43 +15,61 @@ class GameState:
         self.map = self._generate_map()
 
     def _generate_map(self):
-        # 1. Initialize random grid (45% land)
-        grid = [[1 if random.random() < 0.45 else 0 for _ in range(self.width)] for _ in range(self.height)]
+        # 1. Initialize world with Ocean
+        grid = [[0 for _ in range(self.width)] for _ in range(self.height)]
         
-        # 2. Smooth the grid (Cellular Automata)
-        for _ in range(5):
-            new_grid = [[0 for _ in range(self.width)] for _ in range(self.height)]
-            for y in range(self.height):
-                for x in range(self.width):
-                    land_count = 0
-                    for dy in [-1, 0, 1]:
-                        for dx in [-1, 0, 1]:
-                            nx, ny = x + dx, y + dy
-                            if 0 <= nx < self.width and 0 <= ny < self.height:
-                                land_count += grid[ny][nx]
-                    # Tile becomes land if it has >= 5 land neighbors (including itself)
-                    new_grid[y][x] = 1 if land_count >= 5 else 0
-            grid = new_grid
+        # 2. Seed and Grow continents
+        num_continents = random.randint(2, 4)
+        for _ in range(num_continents):
+            # Pick a seed point that is far from the poles
+            cx = random.randint(5, self.width - 6)
+            cy = random.randint(5, self.height - 6)
             
-        # 3. Assign specific biomes
+            target_size = random.randint(120, 250)
+            
+            grid[cy][cx] = 1
+            added = 1
+            frontier = [(cx, cy)]
+            
+            while frontier and added < target_size:
+                idx = random.randint(0, len(frontier) - 1)
+                fx, fy = frontier.pop(idx)
+                
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        if dx == 0 and dy == 0: continue
+                        nx, ny = fx + dx, fy + dy
+                        
+                        # Keep continents away from the extreme poles (leave room for snow/tundra)
+                        if 2 <= ny < self.height - 2 and 0 <= nx < self.width:
+                            if grid[ny][nx] == 0:
+                                if random.random() < 0.6:
+                                    grid[ny][nx] = 1
+                                    added += 1
+                                    frontier.append((nx, ny))
+                                    if added >= target_size: break
+                    if added >= target_size: break
+
+        # 3. Build the map_data and assign biomes
         map_data = []
         for y in range(self.height):
             row = []
             for x in range(self.width):
-                if grid[y][x] == 1:
-                    # It's land. Distribute biomes.
+                # Hardcode poles
+                if y < 2 or y >= self.height - 2:
+                    terrain = "snow" if random.random() < 0.5 else "tundra"
+                elif grid[y][x] == 1:
                     rand = random.random()
                     if rand < 0.10: terrain = "mountains"
                     elif rand < 0.30: terrain = "forest"
                     elif rand < 0.60: terrain = "plains"
                     else: terrain = "grassland"
                 else:
-                    # It's water. We'll differentiate coast vs ocean in the next pass.
                     terrain = "ocean"
                 row.append({"terrain": terrain, "improvement": None, "owner": -1})
             map_data.append(row)
             
-        # 4. Generate coastlines (shallow water next to land)
+        # 4. Generate coastlines
         for y in range(self.height):
             for x in range(self.width):
                 if map_data[y][x]["terrain"] == "ocean":
@@ -155,7 +173,7 @@ class GameState:
     def _calculate_city_yields(self, city):
         food, prod, gold, science, culture = 0, 0, 0, 0, 0
         food += 2
-        prod += 1
+        prod += 2
         
         for wx, wy in city.get("worked_tiles", []):
             if 0 <= wy < self.height and 0 <= wx < self.width:

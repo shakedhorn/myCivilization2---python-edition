@@ -226,10 +226,22 @@ class CivClient:
                             if not me.get("ended_turn", False):
                                 my_units = [u for u in self.game_state["units"].values() if u["owner"] == self.my_id]
                                 all_moved = all(u.get("has_moved", False) for u in my_units)
-                                if all_moved:
+                                
+                                my_cities = [c for c in self.game_state.get("cities", {}).values() if c["owner"] == self.my_id]
+                                all_producing = all(c.get("production_item") is not None for c in my_cities)
+                                
+                                if all_moved and all_producing:
                                     end_btn_rect = pygame.Rect(800, 620, 180, 50)
                                     if end_btn_rect.collidepoint(mx, my):
                                         self.send_net_msg({"type": "END_TURN"})
+                                elif not all_producing:
+                                    end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                                    if end_btn_rect.collidepoint(mx, my):
+                                        for cid, city in self.game_state.get("cities", {}).items():
+                                            if city["owner"] == self.my_id and city.get("production_item") is None:
+                                                self.selected_city_id = cid
+                                                self.selected_unit_id = None
+                                                break
                         continue
                         
                     if self.selected_city_id and mx >= 824 and 40 <= my <= 600:
@@ -542,15 +554,24 @@ class CivClient:
                 if not me.get("ended_turn", False):
                     my_units = [u for u in self.game_state["units"].values() if u["owner"] == self.my_id]
                     units_needing_orders = sum(1 for u in my_units if not u.get("has_moved", False))
-                    if units_needing_orders == 0:
-                        end_btn_rect = pygame.Rect(800, 620, 180, 50)
-                        pygame.draw.rect(self.screen, (50, 200, 50), end_btn_rect)
-                        self.screen.blit(self.font_main.render("END TURN ->", True, (0, 0, 0)), (810, 625))
-                    else:
+                    
+                    my_cities = [c for c in self.game_state.get("cities", {}).values() if c["owner"] == self.my_id]
+                    cities_needing_orders = sum(1 for c in my_cities if c.get("production_item") is None)
+                    
+                    if cities_needing_orders > 0:
+                        end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                        pygame.draw.rect(self.screen, (200, 150, 50), end_btn_rect)
+                        pygame.draw.rect(self.screen, (255, 200, 100), end_btn_rect, 2)
+                        self.screen.blit(self.font_small.render("CHOOSE PRODUCTION", True, (0, 0, 0)), (780, 635))
+                    elif units_needing_orders > 0:
                         end_btn_rect = pygame.Rect(750, 620, 260, 50)
                         pygame.draw.rect(self.screen, (80, 80, 80), end_btn_rect)
                         pygame.draw.rect(self.screen, (150, 150, 150), end_btn_rect, 2)
                         self.screen.blit(self.font_small.render(f"Unit needs orders ({units_needing_orders})", True, (200, 200, 200)), (770, 635))
+                    else:
+                        end_btn_rect = pygame.Rect(800, 620, 180, 50)
+                        pygame.draw.rect(self.screen, (50, 200, 50), end_btn_rect)
+                        self.screen.blit(self.font_main.render("END TURN ->", True, (0, 0, 0)), (810, 625))
                 else:
                     self.draw_text_centered("Waiting for everyone to end their turn...", 650, self.font_main, (200, 200, 200), shadow=True)
 
