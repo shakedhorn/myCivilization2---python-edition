@@ -25,30 +25,46 @@ class GameState:
             cx = random.randint(5, self.width - 6)
             cy = random.randint(5, self.height - 6)
             
-            target_size = random.randint(120, 250)
+            target_size = random.randint(150, 300)
             
             grid[cy][cx] = 1
             added = 1
-            frontier = [(cx, cy)]
+            continent_tiles = [(cx, cy)]
+            attempts = 0
             
-            while frontier and added < target_size:
-                idx = random.randint(0, len(frontier) - 1)
-                fx, fy = frontier.pop(idx)
+            # Keep picking a random tile in the continent and trying to expand to a neighbor
+            while added < target_size and attempts < target_size * 10:
+                attempts += 1
+                fx, fy = random.choice(continent_tiles)
                 
                 for dy in [-1, 0, 1]:
                     for dx in [-1, 0, 1]:
                         if dx == 0 and dy == 0: continue
-                        nx, ny = fx + dx, fy + dy
+                        nx, ny = (fx + dx) % self.width, fy + dy
                         
-                        # Keep continents away from the extreme poles (leave room for snow/tundra)
-                        if 2 <= ny < self.height - 2 and 0 <= nx < self.width:
+                        # Leave room for poles (y=0,1 and y=height-2,height-1)
+                        if 2 <= ny < self.height - 2:
                             if grid[ny][nx] == 0:
-                                if random.random() < 0.6:
-                                    grid[ny][nx] = 1
-                                    added += 1
-                                    frontier.append((nx, ny))
-                                    if added >= target_size: break
-                    if added >= target_size: break
+                                grid[ny][nx] = 1
+                                added += 1
+                                continent_tiles.append((nx, ny))
+                        
+        # 2.5 Smooth the continents so they aren't spiky
+        for _ in range(2):
+            new_grid = [[0 for _ in range(self.width)] for _ in range(self.height)]
+            for y in range(2, self.height - 2):
+                for x in range(self.width):
+                    land_count = 0
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            nx, ny = (x + dx) % self.width, y + dy
+                            if 0 <= ny < self.height:
+                                land_count += grid[ny][nx]
+                    # >= 4 favors thicker continents
+                    new_grid[y][x] = 1 if land_count >= 4 else 0
+            for y in range(2, self.height - 2):
+                for x in range(self.width):
+                    grid[y][x] = new_grid[y][x]
 
         # 3. Build the map_data and assign biomes
         map_data = []
@@ -76,8 +92,8 @@ class GameState:
                     is_coast = False
                     for dy in [-1, 0, 1]:
                         for dx in [-1, 0, 1]:
-                            nx, ny = x + dx, y + dy
-                            if 0 <= nx < self.width and 0 <= ny < self.height:
+                            nx, ny = (x + dx) % self.width, y + dy
+                            if 0 <= ny < self.height:
                                 if map_data[ny][nx]["terrain"] not in ["ocean", "coast"]:
                                     is_coast = True
                     if is_coast:
@@ -227,14 +243,12 @@ class GameState:
                 city["population"] += 1
                 city["stored_food"] -= food_needed
                 cx, cy = city["x"], city["y"]
-                opts = []
-                for dx in [-1, 0, 1]:
-                    for dy in [-1, 0, 1]:
-                        nx, ny = cx + dx, cy + dy
-                        if 0 <= nx < self.width and 0 <= ny < self.height and (nx, ny) not in city.get("worked_tiles", []):
-                            opts.append((nx, ny))
-                if opts:
-                    city.setdefault("worked_tiles", []).append(random.choice(opts))
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        if dx == 0 and dy == 0: continue
+                        nx, ny = (cx + dx) % self.width, cy + dy
+                        if 0 <= ny < self.height and (nx, ny) not in city.setdefault("worked_tiles", []):
+                            city["worked_tiles"].append((nx, ny))
                     
             city["stored_production"] = city.get("stored_production", 0) + yields["production"]
             prod_item = city.get("production_item")
@@ -280,9 +294,14 @@ class GameState:
         if unit["owner"] != p_id: return False
         if unit.get("has_moved", False): return False
         
-        # 1. בדיקת טווח תנועה (פשוט: מרחק 1)
-        if abs(unit["x"] - nx) > 1 or abs(unit["y"] - ny) > 1: return False
+        # 1. בדיקת טווח תנועה (פשוט: מרחק 1) (with horizontal wrap)
+        dx = abs(unit["x"] - nx)
+        if dx > self.width / 2: dx = self.width - dx
+        
+        if dx > 1 or abs(unit["y"] - ny) > 1: return False
 
+        # Ensure ny is valid (just in case)
+        if not (0 <= ny < self.height): return False
         target_terrain = self.map[ny][nx]["terrain"]
         stats = GameData.UNITS[unit["type"]]
 

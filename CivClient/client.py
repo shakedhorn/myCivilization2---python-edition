@@ -171,14 +171,13 @@ class CivClient:
                         self.camera_x -= event.rel[0]
                         self.camera_y -= event.rel[1]
                         
-                        # Clamp camera to map bounds
+                        # Clamp camera to map bounds (only Y axis, X wraps infinitely!)
                         if self.game_state and "map" in self.game_state:
-                            map_width = len(self.game_state["map"][0]) * self.tile_size
+                            map_pixel_w = len(self.game_state["map"][0]) * self.tile_size
                             map_height = len(self.game_state["map"]) * self.tile_size
-                            max_x = max(0, map_width - 1024)
                             max_y = max(0, map_height - 560) # Game area is 560px tall (600 bottom - 40 top)
                             
-                            self.camera_x = max(0, min(self.camera_x, max_x))
+                            self.camera_x %= map_pixel_w
                             self.camera_y = max(0, min(self.camera_y, max_y))
                             
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
@@ -271,7 +270,8 @@ class CivClient:
                         continue
                         
                     # המרת קואורדינטות עכבר לאריחי מפה (כולל המצלמה)
-                    grid_x = (mx + self.camera_x) // self.tile_size
+                    map_w = len(self.game_state["map"][0]) if self.game_state.get("map") else 1
+                    grid_x = ((mx + self.camera_x) // self.tile_size) % map_w
                     grid_y = (my - 40 + self.camera_y) // self.tile_size
                     if event.button == 1: # קליק שמאלי - בחירה
                         if self.target_mode and self.selected_unit_id:
@@ -311,18 +311,38 @@ class CivClient:
                             })
                             
                 elif event.type == pygame.MOUSEWHEEL and self.state == "GAME":
-                    if self.selected_city_id:
-                        mx, my = pygame.mouse.get_pos()
-                        if mx >= 824 and 40 <= my <= 600:
-                            self.city_build_scroll_y += event.y * 20
-                            self.city_build_scroll_y = min(0, self.city_build_scroll_y)
-                            # Maximum scroll: 6 items * 50px = 300px + 20px padding = 320px height
-                            # Container height is 560px. So we don't actually need to limit scrolling
-                            # negatively unless there are many items. Let's make it robust:
-                            num_items = 6
-                            content_height = num_items * 50 + 20
-                            max_scroll = max(0, content_height - 560)
-                            self.city_build_scroll_y = max(-max_scroll, self.city_build_scroll_y)
+                    mx, my = pygame.mouse.get_pos()
+                    if self.selected_city_id and mx >= 824 and 40 <= my <= 600:
+                        self.city_build_scroll_y += event.y * 20
+                        self.city_build_scroll_y = min(0, self.city_build_scroll_y)
+                        num_items = 6
+                        content_height = num_items * 50 + 20
+                        max_scroll = max(0, content_height - 560)
+                        self.city_build_scroll_y = max(-max_scroll, self.city_build_scroll_y)
+                    elif 40 <= my < 600 and (mx < 824 if self.selected_city_id else True):
+                        if self.game_state and "map" in self.game_state:
+                            old_tile_size = self.tile_size
+                            
+                            zoom_amount = event.y * 4
+                            new_tile_size = self.tile_size + zoom_amount
+                            
+                            map_height_tiles = len(self.game_state["map"])
+                            # Min zoom: entire map height fits in 560px
+                            min_tile_size = (560 + map_height_tiles - 1) // map_height_tiles
+                            # Max zoom: about 8 tiles fit in 560px
+                            max_tile_size = 560 // 8
+                            
+                            new_tile_size = max(min_tile_size, min(max_tile_size, new_tile_size))
+                            
+                            if new_tile_size != old_tile_size:
+                                # Keep the map perfectly centered on the mouse cursor while zooming
+                                grid_x_exact = (mx + self.camera_x) / old_tile_size
+                                grid_y_exact = (my - 40 + self.camera_y) / old_tile_size
+                                
+                                self.tile_size = new_tile_size
+                                
+                                self.camera_x = int(grid_x_exact * self.tile_size - mx)
+                                self.camera_y = int(grid_y_exact * self.tile_size - (my - 40))
 
             if self.state == "SPLASH":
                 # אפקט פעימה צבעוני לשם המשחק
@@ -362,8 +382,12 @@ class CivClient:
             elif self.state == "GAME" and self.game_state:
                 # ציור המפה והיחידות (כפי שעשינו קודם)
                 for y, row in enumerate(self.game_state["map"]):
+                    map_w = len(row)
+                    map_pixel_w = map_w * self.tile_size
                     for x, tile in enumerate(row):
-                        screen_x = x * self.tile_size - self.camera_x
+                        screen_x = (x * self.tile_size - self.camera_x) % map_pixel_w
+                        if screen_x > map_pixel_w - self.tile_size: screen_x -= map_pixel_w
+                        
                         screen_y = y * self.tile_size - self.camera_y + 40
                         if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
                             color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
@@ -378,8 +402,12 @@ class CivClient:
                             pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
                 # ציור ערים
+                map_w = len(self.game_state["map"][0]) if self.game_state.get("map") else 1
+                map_pixel_w = map_w * self.tile_size
                 for cid, city in self.game_state.get("cities", {}).items():
-                    screen_x = city["x"] * self.tile_size - self.camera_x
+                    screen_x = (city["x"] * self.tile_size - self.camera_x) % map_pixel_w
+                    if screen_x > map_pixel_w - self.tile_size: screen_x -= map_pixel_w
+                    
                     screen_y = city["y"] * self.tile_size - self.camera_y + 40
                     if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
                         color = (150, 150, 150)
@@ -406,11 +434,16 @@ class CivClient:
                         if self.selected_city_id == cid:
                             pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
 
+
                 for uid, u in self.game_state["units"].items():
                     color = (255, 255, 0) if u["owner"] == self.my_id else (255, 50, 50)
                     if u["owner"] == self.my_id and u.get("has_moved", False):
                         color = (150, 150, 0) # Darker yellow if moved
-                    pos = (u["x"] * self.tile_size - self.camera_x + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
+                        
+                    ux_screen = (u["x"] * self.tile_size - self.camera_x) % map_pixel_w
+                    if ux_screen > map_pixel_w - self.tile_size: ux_screen -= map_pixel_w
+                    
+                    pos = (ux_screen + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
                     if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
                         pygame.draw.circle(self.screen, color, pos, 15)
                         
@@ -421,7 +454,7 @@ class CivClient:
                         
                         # סימון יחידה נבחרת בריבוע לבן
                         if self.selected_unit_id == uid:
-                            pygame.draw.rect(self.screen, (255, 255, 255), (u["x"]*self.tile_size - self.camera_x, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
+                            pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
                             
                 # ציור Top UI
                 top_rect = pygame.Rect(0, 0, 1024, 40)
@@ -574,6 +607,25 @@ class CivClient:
                         self.screen.blit(self.font_main.render("END TURN ->", True, (0, 0, 0)), (810, 625))
                 else:
                     self.draw_text_centered("Waiting for everyone to end their turn...", 650, self.font_main, (200, 200, 200), shadow=True)
+
+            if self.state == "GAME" and self.game_state and "map" in self.game_state:
+                keys = pygame.key.get_pressed()
+                scroll_speed = 20
+                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                    self.camera_x -= scroll_speed
+                if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                    self.camera_x += scroll_speed
+                if keys[pygame.K_UP] or keys[pygame.K_w]:
+                    self.camera_y -= scroll_speed
+                if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                    self.camera_y += scroll_speed
+                    
+                map_pixel_w = len(self.game_state["map"][0]) * self.tile_size
+                map_height = len(self.game_state["map"]) * self.tile_size
+                max_y = max(0, map_height - 560)
+                
+                self.camera_x %= map_pixel_w
+                self.camera_y = max(0, min(self.camera_y, max_y))
 
             pygame.display.flip()
         pygame.quit()

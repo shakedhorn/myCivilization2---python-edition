@@ -9,29 +9,8 @@ class GameServer:
     def __init__(self, port=54321):
         self.port = port
         self.clients = {}
-        self.game = GameState(width=60, height=40)
+        self.game = GameState(width=50, height=36)
         self.lock = threading.Lock()
-        self.create_initial_map(60, 40)
-
-    def create_initial_map(self, w, h):
-        self.game.map = []
-        for y in range(h):
-            row = []
-            for x in range(w):
-                is_polar = (y <= 1 or y >= h - 2)
-                # Earth probability: ~71% water, 29% land
-                if random.random() < 0.71:
-                    terrain = random.choices(["ocean", "coast"], weights=[80, 20])[0]
-                else:
-                    if is_polar:
-                        terrain = random.choices(["snow", "tundra"], weights=[50, 50])[0]
-                    else:
-                        terrain = random.choices(
-                            ["desert", "forest", "grassland", "plains", "hills", "mountains"],
-                            weights=[33, 31, 10, 10, 10, 6]
-                        )[0]
-                row.append({"terrain": terrain, "owner": -1, "improvement": None})
-            self.game.map.append(row)
 
     def handle_client(self, conn, addr):
         player_id = None
