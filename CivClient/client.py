@@ -399,6 +399,26 @@ class CivClient:
                                 pygame.draw.rect(self.screen, imp_color, (screen_x + 8, screen_y + 8, 16, 16))
                                 pygame.draw.rect(self.screen, (0, 0, 0), (screen_x + 8, screen_y + 8, 16, 16), 1)
                                 
+                            owner = tile.get("owner", -1)
+                            if owner != -1:
+                                p_color = self.game_state.get("players", {}).get(owner, {}).get("color", (255, 255, 255))
+                                border_thick = max(2, self.tile_size // 12)
+                                
+                                # Check Top
+                                if y == 0 or self.game_state["map"][y-1][x].get("owner", -1) != owner:
+                                    pygame.draw.rect(self.screen, p_color, (screen_x, screen_y, self.tile_size, border_thick))
+                                # Check Bottom
+                                if y == len(self.game_state["map"]) - 1 or self.game_state["map"][y+1][x].get("owner", -1) != owner:
+                                    pygame.draw.rect(self.screen, p_color, (screen_x, screen_y + self.tile_size - border_thick, self.tile_size, border_thick))
+                                # Check Left (wrap)
+                                lx = (x - 1) % map_w
+                                if self.game_state["map"][y][lx].get("owner", -1) != owner:
+                                    pygame.draw.rect(self.screen, p_color, (screen_x, screen_y, border_thick, self.tile_size))
+                                # Check Right (wrap)
+                                rx = (x + 1) % map_w
+                                if self.game_state["map"][y][rx].get("owner", -1) != owner:
+                                    pygame.draw.rect(self.screen, p_color, (screen_x + self.tile_size - border_thick, screen_y, border_thick, self.tile_size))
+                                
                             pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
                 # ציור ערים

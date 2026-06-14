@@ -191,21 +191,39 @@ class GameState:
         food += 2
         prod += 2
         
-        for wx, wy in city.get("worked_tiles", []):
+        # Auto-assign worked tiles based on population and yields
+        # Calculate yield for each owned tile
+        tile_yields = []
+        for wx, wy in city.get("owned_tiles", []):
             if 0 <= wy < self.height and 0 <= wx < self.width:
                 t_type = self.map[wy][wx]["terrain"]
                 imp_type = self.map[wy][wx].get("improvement")
                 
                 t_stats = GameData.TERRAIN.get(t_type, {})
-                food += t_stats.get("food_yield", 0)
-                prod += t_stats.get("production_yield", 0)
-                gold += t_stats.get("gold_yield", 0)
+                f = t_stats.get("food_yield", 0)
+                p = t_stats.get("production_yield", 0)
+                g = t_stats.get("gold_yield", 0)
                 
                 if imp_type:
                     i_stats = GameData.IMPROVEMENTS.get(imp_type, {})
-                    food += i_stats.get("food_bonus", 0)
-                    prod += i_stats.get("production_bonus", 0)
-                    gold += i_stats.get("gold_bonus", 0)
+                    f += i_stats.get("food_bonus", 0)
+                    p += i_stats.get("production_bonus", 0)
+                    g += i_stats.get("gold_bonus", 0)
+                
+                total_val = f * 2 + p * 2 + g
+                tile_yields.append((total_val, f, p, g, wx, wy))
+                
+        # Sort and pick top tiles up to population limit
+        tile_yields.sort(reverse=True, key=lambda x: x[0])
+        pop = city.get("population", 1)
+        worked = tile_yields[:pop]
+        
+        city["worked_tiles"] = [(x[4], x[5]) for x in worked]
+        
+        for val, f, p, g, wx, wy in worked:
+            food += f
+            prod += p
+            gold += g
                 
         for b in city.get("buildings", []):
             b_stats = GameData.BUILDINGS.get(b, {})
@@ -226,29 +244,43 @@ class GameState:
         for c_id, city in self.cities.items():
             yields = self._calculate_city_yields(city)
             city["last_production_yield"] = yields["production"]
-            p_id = city["owner"]
-            if p_id in self.players:
-                self.players[p_id]["last_gold_income"] += yields["gold"]
-                self.players[p_id]["last_science_income"] += yields["science"]
-                self.players[p_id]["last_culture_income"] += yields["culture"]
-                
-        for p_id, p in self.players.items():
-            p["gold"] += p.get("last_gold_income", 0)
-            p["science"] += p.get("last_science_income", 0)
-            p["culture"] += p.get("last_culture_income", 0)
+            c_owner = city["owner"]
+            if c_owner in self.players:
+                self.players[c_owner]["last_gold_income"] += yields["gold"]
+                self.players[c_owner]["last_science_income"] += yields["science"]
+                self.players[c_owner]["last_culture_income"] += yields["culture"]
                 
             city["stored_food"] = city.get("stored_food", 0) + yields["food"]
             food_needed = 15 + (city.get("population", 1) * 5)
             if city["stored_food"] >= food_needed:
                 city["population"] += 1
                 city["stored_food"] -= food_needed
+                
+            # Border Expansion Logic
+            city["border_progress"] = city.get("border_progress", 0) + yields["culture"]
+            if city["border_progress"] >= 25:
+                # Find adjacent unowned tiles within radius 3
                 cx, cy = city["x"], city["y"]
-                for dy in [-1, 0, 1]:
-                    for dx in [-1, 0, 1]:
-                        if dx == 0 and dy == 0: continue
-                        nx, ny = (cx + dx) % self.width, cy + dy
-                        if 0 <= ny < self.height and (nx, ny) not in city.setdefault("worked_tiles", []):
-                            city["worked_tiles"].append((nx, ny))
+                candidates = []
+                owned_set = set(city.get("owned_tiles", []))
+                
+                for ox, oy in owned_set:
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            nx, ny = (ox + dx) % self.width, oy + dy
+                            if 0 <= ny < self.height and (nx, ny) not in owned_set:
+                                # Ensure distance <= 3
+                                dist_x = min((nx - cx) % self.width, (cx - nx) % self.width)
+                                dist_y = abs(ny - cy)
+                                if dist_x <= 3 and dist_y <= 3:
+                                    if self.map[ny][nx].get("owner") == -1:
+                                        candidates.append((nx, ny))
+                
+                if candidates:
+                    chosen_x, chosen_y = random.choice(candidates)
+                    city["owned_tiles"].append((chosen_x, chosen_y))
+                    self.map[chosen_y][chosen_x]["owner"] = c_owner
+                    city["border_progress"] -= 25
                     
             city["stored_production"] = city.get("stored_production", 0) + yields["production"]
             prod_item = city.get("production_item")
@@ -264,7 +296,7 @@ class GameState:
                     if prod_item["category"] == "unit":
                         unit_type = prod_item["name"]
                         new_unit = {
-                            "type": unit_type, "owner": p_id,
+                            "type": unit_type, "owner": c_owner,
                             "x": city["x"], "y": city["y"], "hp": 100, "has_moved": False
                         }
                         if unit_type == "builder":
@@ -275,6 +307,11 @@ class GameState:
                         if prod_item["name"] not in city.get("buildings", []):
                             city.setdefault("buildings", []).append(prod_item["name"])
                     city["production_item"] = None
+                    
+        for p_id, p in self.players.items():
+            p["gold"] += p.get("last_gold_income", 0)
+            p["science"] += p.get("last_science_income", 0)
+            p["culture"] += p.get("last_culture_income", 0)
             
         for u in self.units.values():
             u["has_moved"] = False
@@ -338,8 +375,19 @@ class GameState:
         unit = self.units.get(u_id)
         if unit and unit["type"] == "settler" and unit["owner"] == p_id:
             city_id = f"city_{unit['x']}_{unit['y']}"
+            # Claim 3x3 starting territory
+            owned_tiles = []
+            cx, cy = unit["x"], unit["y"]
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    nx, ny = (cx + dx) % self.width, cy + dy
+                    if 0 <= ny < self.height:
+                        if self.map[ny][nx].get("owner") == -1: # Only claim unowned
+                            self.map[ny][nx]["owner"] = p_id
+                            owned_tiles.append((nx, ny))
+            
             self.cities[city_id] = {
-                "x": unit["x"], "y": unit["y"],
+                "x": cx, "y": cy,
                 "owner": p_id, "hp": 200, "has_walls": False,
                 "name": f"City of Player {p_id}",
                 "population": 1,
@@ -347,7 +395,9 @@ class GameState:
                 "stored_production": 0,
                 "production_item": None,
                 "buildings": ["cityCenter"],
-                "worked_tiles": [(unit["x"], unit["y"])]
+                "owned_tiles": owned_tiles,
+                "worked_tiles": [],
+                "border_progress": 0
             }
             del self.units[u_id] # מחיקת המתיישב
             return True
