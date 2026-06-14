@@ -410,7 +410,8 @@ class CivClient:
                     
                     screen_y = city["y"] * self.tile_size - self.camera_y + 40
                     if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
-                        color = (150, 150, 150)
+                        owner_color = self.game_state.get("players", {}).get(city.get("owner", ""), {}).get("color", (150, 150, 150))
+                        color = owner_color
                         pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
                         pygame.draw.rect(self.screen, (0, 0, 0), (screen_x, screen_y, self.tile_size, self.tile_size), 2)
                         
@@ -436,9 +437,10 @@ class CivClient:
 
 
                 for uid, u in self.game_state["units"].items():
-                    color = (255, 255, 0) if u["owner"] == self.my_id else (255, 50, 50)
+                    base_color = self.game_state.get("players", {}).get(u.get("owner", ""), {}).get("color", (255, 255, 255))
+                    color = base_color
                     if u["owner"] == self.my_id and u.get("has_moved", False):
-                        color = (150, 150, 0) # Darker yellow if moved
+                        color = (max(0, base_color[0] - 100), max(0, base_color[1] - 100), max(0, base_color[2] - 100)) # Darker if moved
                         
                     ux_screen = (u["x"] * self.tile_size - self.camera_x) % map_pixel_w
                     if ux_screen > map_pixel_w - self.tile_size: ux_screen -= map_pixel_w
@@ -457,9 +459,13 @@ class CivClient:
                             pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
                             
                 # ציור Top UI
-                top_rect = pygame.Rect(0, 0, 1024, 40)
-                pygame.draw.rect(self.screen, (20, 20, 30), top_rect)
                 me = self.game_state.get("players", {}).get(self.my_id, {})
+                my_color = me.get("color", (40, 40, 60))
+                # Make the top bar background a darker version of the player's color
+                bg_color = (max(0, my_color[0] // 2 - 20), max(0, my_color[1] // 2 - 20), max(0, my_color[2] // 2 - 20))
+                
+                top_rect = pygame.Rect(0, 0, 1024, 40)
+                pygame.draw.rect(self.screen, bg_color, top_rect)
                 turn = self.game_state.get("turn", 1)
                 
                 top_text = f"Turn: {turn}   |   Gold: {me.get('gold',0)} (+{me.get('last_gold_income',0)})   |   Science: {me.get('science',0)} (+{me.get('last_science_income',0)})   |   Culture: {me.get('culture',0)} (+{me.get('last_culture_income',0)})"

@@ -27,9 +27,22 @@ class GameServer:
                 
                 with self.lock:
                     if player_id not in self.game.players:
+                        available_colors = [
+                            (255, 50, 50),   # Red
+                            (50, 50, 255),   # Blue
+                            (50, 255, 50),   # Green
+                            (255, 255, 50),  # Yellow
+                            (255, 50, 255),  # Purple
+                            (50, 255, 255),  # Cyan
+                            (255, 150, 50),  # Orange
+                            (255, 255, 255), # White
+                        ]
+                        assigned_color = available_colors[len(self.game.players) % len(available_colors)]
+                        
                         self.game.players[player_id] = {
                             "name": username, "gold": 50, "science": 0, "culture": 0, "production": 0,
-                            "techs": ["pottery", "mining", "animalHusbandry", "sailing", "irrigation", "construction"], "civics": [], "ended_turn": False
+                            "techs": ["pottery", "mining", "animalHusbandry", "sailing", "irrigation", "construction"], "civics": [], "ended_turn": False,
+                            "color": assigned_color
                         }
                         # Find a valid land tile for starting spawn
                         spawn_x, spawn_y = 5, 5
