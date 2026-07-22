@@ -97,7 +97,7 @@ class GameServer:
                         if success:
                             print(f"City built successfully for {player_id}")
                             
-                    elif cmd in ["END_TURN", "SKIP_UNIT_TURN", "RANGED_ATTACK", "CHANGE_PRODUCTION", "BUILD_IMPROVEMENT"]:
+                    elif cmd in ["END_TURN", "SKIP_UNIT_TURN", "RANGED_ATTACK", "CHANGE_PRODUCTION", "BUILD_IMPROVEMENT", "CHOOSE_RESEARCH", "CHOOSE_CIVIC"]:
                         self.game.handle_command(player_id, cmd, msg)
 
         except Exception as e:

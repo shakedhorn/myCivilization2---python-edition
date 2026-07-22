@@ -292,16 +292,25 @@ class CivClient:
                         
                     if self.selected_city_id and mx >= 824 and 40 <= my <= 600:
                         if event.button == 1:
-                            base_options = [
-                                ("Warrior", "unit", "warrior"),
-                                ("Slinger", "unit", "slinger"),
-                                ("Settler", "unit", "settler"),
-                                ("Builder", "unit", "builder"),
-                                ("Monument", "building", "monument"),
-                                ("Granary", "building", "granary")
-                            ]
+                            me = self.game_state.get("players", {}).get(self.my_id, {})
+                            my_techs = me.get("techs", [])
+                            my_civics = me.get("civics", [])
                             city = self.game_state.get("cities", {}).get(self.selected_city_id, {})
-                            options = [o for o in base_options if o[1] != "building" or o[2] not in city.get("buildings", [])]
+                            options = []
+                            
+                            for uid, u_stats in GameData.UNITS.items():
+                                if u_stats["requiredTech"] and u_stats["requiredTech"] not in my_techs: continue
+                                if u_stats["UpgradeTo"]:
+                                    upg_tech = GameData.UNITS[u_stats["UpgradeTo"]]["requiredTech"]
+                                    if upg_tech and upg_tech in my_techs: continue
+                                options.append((u_stats["name"], "unit", uid))
+                                
+                            for bid, b_stats in GameData.BUILDINGS.items():
+                                if bid in city.get("buildings", []): continue
+                                if b_stats["requiredTech"] and b_stats["requiredTech"] not in my_techs: continue
+                                if b_stats["requiredCivic"] and b_stats["requiredCivic"] not in my_civics: continue
+                                if b_stats["requiredBefore"] and b_stats["requiredBefore"] not in city.get("buildings", []): continue
+                                options.append((b_stats["name"], "building", bid))
                             
                             for i, (label, cat, internal_name) in enumerate(options):
                                 bx = 834
@@ -396,7 +405,7 @@ class CivClient:
                 pulse = (math.sin(time.time() * 5) + 1) / 2
                 color = (255, 200 + 55 * pulse, 50)
                 self.draw_text_centered("MY CIVILIZATION 2", 250, self.font_title, color)
-                self.draw_text_centered("Shaked Horn & Benjamin Zimerman", 400, self.font_main, (200, 200, 200))
+                self.draw_text_centered("Shaked Horn", 400, self.font_main, (200, 200, 200))
                 if time.time() - self.start_time > 3: self.state = "CONNECT"
             
             elif self.state in ["CONNECT", "LOGIN", "LOBBY"]:
@@ -748,6 +757,16 @@ class CivClient:
                         pygame.draw.rect(self.screen, (80, 80, 80), end_btn_rect)
                         pygame.draw.rect(self.screen, (150, 150, 150), end_btn_rect, 2)
                         self.screen.blit(self.font_small.render(f"Unit needs orders ({units_needing_orders})", True, (200, 200, 200)), (770, 635))
+                    elif me.get("current_research") is None:
+                        end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                        pygame.draw.rect(self.screen, (50, 150, 200), end_btn_rect)
+                        pygame.draw.rect(self.screen, (100, 200, 255), end_btn_rect, 2)
+                        self.screen.blit(self.font_small.render("CHOOSE RESEARCH", True, (0, 0, 0)), (790, 635))
+                    elif me.get("current_civic") is None:
+                        end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                        pygame.draw.rect(self.screen, (200, 100, 200), end_btn_rect)
+                        pygame.draw.rect(self.screen, (255, 150, 255), end_btn_rect, 2)
+                        self.screen.blit(self.font_small.render("CHOOSE CIVIC", True, (0, 0, 0)), (810, 635))
                     else:
                         end_btn_rect = pygame.Rect(800, 620, 180, 50)
                         pygame.draw.rect(self.screen, (50, 200, 50), end_btn_rect)
