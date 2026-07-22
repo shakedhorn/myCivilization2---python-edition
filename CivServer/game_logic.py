@@ -129,6 +129,8 @@ class GameState:
             return self._choose_research(player_id, data)
         elif cmd_type == "CHOOSE_CIVIC":
             return self._choose_civic(player_id, data)
+        elif cmd_type == "RANGED_ATTACK":
+            return self._ranged_attack(player_id, data)
         # כאן יכנסו כל שאר הפקודות (BUILD_BUILDING, ADOPT_CIVIC וכו')
         return False
         
@@ -422,9 +424,13 @@ class GameState:
             target_stats = GameData.UNITS[target_unit["type"]]
             if target_stats["melee"] == 0: # יחידה אזרחית - כיבוש
                 target_unit["owner"] = p_id
+                unit["x"], unit["y"] = nx, ny
+                unit["has_moved"] = True
                 return True
             else: # קרב
-                return self._resolve_melee_combat(u_id, target_uid)
+                success = self._resolve_melee_combat(u_id, target_uid)
+                unit["has_moved"] = True
+                return success
 
         # 4. בדיקת עיר
         # (כאן תוסיף בדיקה אם יש עיר ב-nx,ny ותפעיל לוגיקת מצור)
@@ -491,4 +497,38 @@ class GameState:
         if att["hp"] <= 0:
             if attacker_id in self.units: del self.units[attacker_id]
             
+        return True
+
+    def _ranged_attack(self, p_id, data):
+        u_id = str(data.get("unit_id"))
+        tx, ty = data.get("tx"), data.get("ty")
+        
+        if u_id not in self.units: return False
+        unit = self.units[u_id]
+        if unit["owner"] != p_id: return False
+        if unit.get("has_moved", False): return False
+        
+        stats = GameData.UNITS.get(unit["type"], {})
+        rng = stats.get("range", 0)
+        if rng == 0: return False
+        
+        # Check distance
+        dist_x = min(abs(unit["x"] - tx), self.width - abs(unit["x"] - tx))
+        dist_y = abs(unit["y"] - ty)
+        if dist_x > rng or dist_y > rng: return False
+        
+        target_uid, target_unit = self._get_unit_at(tx, ty)
+        if not target_unit: return False
+        if target_unit["owner"] == p_id: return False
+        
+        # Apply damage
+        def_stats = GameData.UNITS.get(target_unit["type"], {})
+        
+        damage_to_def = max(10, stats["melee"] - (def_stats["melee"] // 2))
+        target_unit["hp"] = target_unit.get("hp", 100) - damage_to_def
+        
+        if target_unit["hp"] <= 0:
+            del self.units[target_uid]
+            
+        unit["has_moved"] = True
         return True

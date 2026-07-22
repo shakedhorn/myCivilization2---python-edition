@@ -1,5 +1,4 @@
 import pygame
-import pygame
 import socket
 import json
 import threading
@@ -48,7 +47,6 @@ class CivClient:
         self.city_build_scroll_y = 0
         self.active_panel = "MAP"
         self.tree_scroll_y = 0
-        self.server_ip = ""
         self.server_ip = ""
 
     def send_net_msg(self, msg_dict):
@@ -148,7 +146,7 @@ class CivClient:
                                     self.sock.connect((self.server_ip, port))
                                     
                                     # 5. התחברות (Login) לשרת המשחק
-                                    self.sock.sendall(json.dumps({"type": "LOGIN", "user": self.username}).encode())
+                                    self.send_net_msg({"type": "LOGIN", "user": self.username})
                                     game_resp = json.loads(self.sock.recv(1024).decode())
                                     
                                     if game_resp.get("status") == "LOGIN_OK":

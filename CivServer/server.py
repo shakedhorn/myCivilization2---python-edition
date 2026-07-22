@@ -16,9 +16,15 @@ class GameServer:
         player_id = None
         try:
             # שלב 1: LOGIN
-            raw_login = conn.recv(1024).decode()
-            if not raw_login: return
-            login_msg = json.loads(raw_login)
+            raw_len = conn.recv(4)
+            if not raw_len: return
+            msg_len = int.from_bytes(raw_len, byteorder='big')
+            data = b""
+            while len(data) < msg_len:
+                packet = conn.recv(msg_len - len(data))
+                if not packet: return
+                data += packet
+            login_msg = json.loads(data.decode())
             
             if login_msg.get("type") == "LOGIN":
                 username = login_msg.get("user", "Unknown")
