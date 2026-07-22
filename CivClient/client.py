@@ -47,7 +47,61 @@ class CivClient:
         self.city_build_scroll_y = 0
         self.active_panel = "MAP"
         self.tree_scroll_y = 0
+        self.tree_scroll_x = 0
         self.server_ip = ""
+
+
+    def get_tree_layout(self, items_dict, is_tech):
+        import math
+        layout = {}
+        tiers = {}
+        req_key = "required_techs" if is_tech else "required_civics"
+        
+        def get_tier(k):
+            if k in tiers: return tiers[k]
+            reqs = items_dict[k].get(req_key, [])
+            if not reqs:
+                tiers[k] = 0
+                return 0
+            t = max(get_tier(r) for r in reqs if r in items_dict) + 1
+            tiers[k] = t
+            return t
+
+        for key in items_dict: get_tier(key)
+        
+        tier_groups = {}
+        for k, t in tiers.items():
+            tier_groups.setdefault(t, []).append(k)
+            
+        card_w, card_h = 240, 140
+        margin_x, margin_y = 60, 20
+        
+        current_x = 50
+        for t in sorted(tier_groups.keys()):
+            items_in_tier = tier_groups[t]
+            if t > 0:
+                def avg_parent_y(node):
+                    reqs = items_dict[node].get(req_key, [])
+                    valid_reqs = [r for r in reqs if r in layout]
+                    if not valid_reqs: return 0
+                    return sum(layout[r][1] for r in valid_reqs) / len(valid_reqs)
+                items_in_tier.sort(key=avg_parent_y)
+                
+            max_per_col = 3
+            num_items = len(items_in_tier)
+            
+            for idx, key in enumerate(items_in_tier):
+                col_offset = idx // max_per_col
+                row_idx = idx % max_per_col
+                
+                cx = current_x + (col_offset * (card_w + 20))
+                cy = 120 + row_idx * (card_h + margin_y)
+                layout[key] = (cx, cy)
+                
+            cols_needed = math.ceil(num_items / max_per_col) if num_items > 0 else 1
+            current_x += cols_needed * (card_w + margin_x)
+                
+        return layout
 
     def send_net_msg(self, msg_dict):
         if not self.sock: return
@@ -186,39 +240,35 @@ class CivClient:
                     
                     if my < 40:
                         if event.button == 1:
-                            if 500 <= mx <= 600:
+                            if 600 <= mx <= 700:
                                 self.active_panel = "MAP"
-                            elif 620 <= mx <= 760:
+                            elif 720 <= mx <= 860:
                                 self.active_panel = "TECH"
-                            elif 780 <= mx <= 920:
+                            elif 880 <= mx <= 1020:
                                 self.active_panel = "CIVIC"
                         continue
                         
                     if self.active_panel in ["TECH", "CIVIC"] and 40 <= my < 600:
+                        mods = pygame.key.get_mods()
                         if event.button == 4:
-                            self.tree_scroll_y = min(0, self.tree_scroll_y + 40)
-                        elif event.button == 5:
-                            self.tree_scroll_y -= 40
-                        elif event.button == 1:
-                            me = self.game_state.get("players", {}).get(self.my_id, {})
-                            # Card click logic
-                            card_height = 80
-                            card_margin = 10
-                            cols = 3
-                            items = []
-                            if self.active_panel == "TECH":
-                                items = list(GameData.TECHS.items())
+                            if mods & pygame.KMOD_SHIFT:
+                                self.tree_scroll_y = min(0, self.tree_scroll_y + 40)
                             else:
-                                items = list(GameData.CIVICS.items())
-                                
-                            for i, (key, data) in enumerate(items):
-                                col = i % cols
-                                row = i // cols
-                                cx = 50 + col * 300
-                                cy = 120 + row * (card_height + card_margin) + self.tree_scroll_y
-                                rect = pygame.Rect(cx, cy, 280, card_height)
+                                self.tree_scroll_x = min(0, self.tree_scroll_x + 40)
+                        elif event.button == 5:
+                            if mods & pygame.KMOD_SHIFT:
+                                self.tree_scroll_y -= 40
+                            else:
+                                self.tree_scroll_x -= 40
+                        elif event.button == 1:
+                            is_tech = (self.active_panel == "TECH")
+                            items = GameData.TECHS if is_tech else GameData.CIVICS
+                            layout = self.get_tree_layout(items, is_tech)
+                            
+                            for key, (cx, cy) in layout.items():
+                                rect = pygame.Rect(cx + self.tree_scroll_x, cy + self.tree_scroll_y, 240, 140)
                                 if rect.collidepoint(mx, my):
-                                    if self.active_panel == "TECH":
+                                    if is_tech:
                                         self.send_net_msg({"type": "CHOOSE_RESEARCH", "tech": key})
                                     else:
                                         self.send_net_msg({"type": "CHOOSE_CIVIC", "civic": key})
@@ -280,6 +330,7 @@ class CivClient:
                                         end_btn_rect = pygame.Rect(800, 620, 180, 50)
                                         if end_btn_rect.collidepoint(mx, my):
                                             self.send_net_msg({"type": "END_TURN"})
+                                            self.active_panel = "MAP"
                                 elif not all_producing:
                                     end_btn_rect = pygame.Rect(750, 620, 260, 50)
                                     if end_btn_rect.collidepoint(mx, my):
@@ -476,7 +527,7 @@ class CivClient:
                                     if self.game_state["map"][y][rx].get("owner", -1) != owner:
                                         pygame.draw.rect(self.screen, p_color, (screen_x + self.tile_size - border_thick, screen_y, border_thick, self.tile_size))
                                 
-                                pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
+                                pygame.draw.rect(self.screen, (40, 40, 40), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
                     # ציור ערים
                     map_w = len(self.game_state["map"][0]) if self.game_state.get("map") else 1
@@ -537,9 +588,10 @@ class CivClient:
                             
 
                 elif self.active_panel in ["TECH", "CIVIC"]:
+                    self.screen.set_clip(pygame.Rect(0, 40, 1024 if not self.selected_city_id else 824, 560))
                     pygame.draw.rect(self.screen, (20, 20, 30), (0, 40, 1024, 560))
                     title = "Science Tree" if self.active_panel == "TECH" else "Civic Tree"
-                    self.draw_text_centered(title, 60 + self.tree_scroll_y, self.font_main, (255, 255, 255))
+                    self.draw_text_centered(title, 60, self.font_main, (255, 255, 255))
                     
                     me = self.game_state.get("players", {}).get(self.my_id, {})
                     my_techs = me.get("techs", [])
@@ -547,23 +599,37 @@ class CivClient:
                     current_res = me.get("current_research") if self.active_panel == "TECH" else me.get("current_civic")
                     res_prog = me.get("research_progress", 0) if self.active_panel == "TECH" else me.get("civic_progress", 0)
                     
-                    items = list(GameData.TECHS.items()) if self.active_panel == "TECH" else list(GameData.CIVICS.items())
-                    card_height = 80
-                    card_margin = 10
-                    cols = 3
+                    is_tech = self.active_panel == "TECH"
+                    source_dict = GameData.TECHS if is_tech else GameData.CIVICS
                     
-                    for i, (key, data) in enumerate(items):
-                        col = i % cols
-                        row = i // cols
-                        cx = 50 + col * 300
-                        cy = 120 + row * (card_height + card_margin) + self.tree_scroll_y
-                        rect = pygame.Rect(cx, cy, 280, card_height)
+                    layout = self.get_tree_layout(source_dict, is_tech)
+                    card_width, card_height = 240, 140
+                    
+                    # Draw connecting lines first
+                    for key, (cx, cy) in layout.items():
+                        reqs = source_dict[key].get("required_techs", []) if is_tech else source_dict[key].get("required_civics", [])
+                        for req in reqs:
+                            if req in layout:
+                                rx, ry = layout[req]
+                                start_pos = (rx + card_width + self.tree_scroll_x, ry + card_height // 2 + self.tree_scroll_y)
+                                end_pos = (cx + self.tree_scroll_x, cy + card_height // 2 + self.tree_scroll_y)
+                                pygame.draw.line(self.screen, (100, 100, 100), start_pos, end_pos, 3)
+                    
+                    # Draw cards
+                    for key, (cx, cy) in layout.items():
+                        data = source_dict[key]
+                        draw_x = cx + self.tree_scroll_x
+                        draw_y = cy + self.tree_scroll_y
+                        rect = pygame.Rect(draw_x, draw_y, card_width, card_height)
                         
+                        # Only draw if on screen
+                        if draw_x > 1024 or draw_x + card_width < 0 or draw_y > 600 or draw_y + card_height < 40:
+                            continue
+                            
                         is_unlocked = key in my_techs or key in my_civics
                         is_researching = current_res == key
-                        
-                        reqs = data.get("required_techs", []) if self.active_panel == "TECH" else data.get("required_civics", [])
-                        can_research = all(r in (my_techs if self.active_panel == "TECH" else my_civics) for r in reqs) and not is_unlocked
+                        reqs = data.get("required_techs", []) if is_tech else data.get("required_civics", [])
+                        can_research = all(r in (my_techs if is_tech else my_civics) for r in reqs) and not is_unlocked
                         
                         bg_color = (40, 40, 50)
                         border_color = (100, 100, 100)
@@ -571,8 +637,8 @@ class CivClient:
                             bg_color = (50, 100, 50)
                             border_color = (100, 255, 100)
                         elif is_researching:
-                            bg_color = (50, 50, 150)
-                            border_color = (100, 100, 255)
+                            bg_color = (50, 50, 150) if is_tech else (120, 50, 150)
+                            border_color = (100, 100, 255) if is_tech else (220, 100, 255)
                         elif can_research:
                             bg_color = (80, 80, 80)
                             border_color = (200, 200, 200)
@@ -580,15 +646,41 @@ class CivClient:
                         pygame.draw.rect(self.screen, bg_color, rect)
                         pygame.draw.rect(self.screen, border_color, rect, 2)
                         
-                        self.screen.blit(self.font_small.render(data["name"], True, (255, 255, 255)), (cx + 10, cy + 10))
+                        self.screen.blit(self.font_small.render(data["name"], True, (255, 255, 255)), (draw_x + 10, draw_y + 10))
+                        cost = data.get("science_cost", 0) if is_tech else data.get("culture_cost", 0)
                         
-                        cost = data.get("science_cost", 0) if self.active_panel == "TECH" else data.get("culture_cost", 0)
                         if is_researching:
-                            self.screen.blit(self.font_small.render(f"Progress: {int(res_prog)}/{cost}", True, (200, 200, 255)), (cx + 10, cy + 40))
+                            self.screen.blit(self.font_small.render(f"Progress: {int(res_prog)}/{cost}", True, (200, 200, 255)), (draw_x + 10, draw_y + 40))
                         elif not is_unlocked:
-                            self.screen.blit(self.font_small.render(f"Cost: {cost}", True, (200, 200, 200)), (cx + 10, cy + 40))
+                            self.screen.blit(self.font_small.render(f"Cost: {cost}", True, (200, 200, 200)), (draw_x + 10, draw_y + 40))
                         else:
-                            self.screen.blit(self.font_small.render("Unlocked", True, (150, 255, 150)), (cx + 10, cy + 40))
+                            self.screen.blit(self.font_small.render("Unlocked", True, (150, 255, 150)), (draw_x + 10, draw_y + 40))
+                            
+                        # Draw Turns left and Unlocks
+                        if not is_unlocked and can_research:
+                            income = me.get("last_science_income", 1) if is_tech else me.get("last_culture_income", 1)
+                            progress_val = res_prog if is_researching else 0
+                            turns_left = math.ceil((cost - progress_val) / max(1, income))
+                            self.screen.blit(self.font_small.render(f"Turns: {turns_left}", True, (200, 200, 255)), (draw_x + 120, draw_y + 40))
+                            
+                        unlock_text_y = draw_y + 65
+                        for unit in data.get("unlocked_units", []):
+                            self.screen.blit(self.font_small.render(f"+ Unit: {unit.capitalize()}", True, (200, 255, 200)), (draw_x + 10, unlock_text_y))
+                            unlock_text_y += 22
+                        for bldg in data.get("unlocked_buildings", []):
+                            self.screen.blit(self.font_small.render(f"+ Bldg: {bldg.capitalize()}", True, (200, 200, 255)), (draw_x + 10, unlock_text_y))
+                            unlock_text_y += 22
+                            
+                        if not is_tech:
+                            for policy in data.get("unlocked_policy_cards", []):
+                                self.screen.blit(self.font_small.render(f"+ Policy: {policy.capitalize()}", True, (255, 200, 200)), (draw_x + 10, unlock_text_y))
+                                unlock_text_y += 22
+                            gov = data.get("unlocked_government")
+                            if gov:
+                                self.screen.blit(self.font_small.render(f"+ Gov: {gov.capitalize()}", True, (255, 255, 100)), (draw_x + 10, unlock_text_y))
+                                unlock_text_y += 22
+
+                    self.screen.set_clip(None)  # Reset clipping area
 
 
                 # ציור Top UI
@@ -602,18 +694,18 @@ class CivClient:
                 turn = self.game_state.get("turn", 1)
                 
                 top_text = f"Turn: {turn}  |  Gold: {int(me.get('gold',0))}  |  Science: +{me.get('last_science_income',0)}  |  Culture: +{me.get('last_culture_income',0)}"
-                top_surf = self.font_main.render(top_text, True, (255, 255, 255))
-                self.screen.blit(top_surf, (10, 5))
+                top_surf = self.font_small.render(top_text, True, (255, 255, 255))
+                self.screen.blit(top_surf, (10, 10))
                 
                 # Top Bar Buttons
-                pygame.draw.rect(self.screen, (100, 100, 100) if self.active_panel == "MAP" else (50, 50, 50), (500, 5, 100, 30))
-                self.screen.blit(self.font_small.render("MAP", True, (255, 255, 255)), (530, 10))
+                pygame.draw.rect(self.screen, (100, 100, 100) if self.active_panel == "MAP" else (50, 50, 50), (600, 5, 100, 30))
+                self.screen.blit(self.font_small.render("MAP", True, (255, 255, 255)), (630, 10))
                 
-                pygame.draw.rect(self.screen, (100, 100, 200) if self.active_panel == "TECH" else (50, 50, 100), (620, 5, 140, 30))
-                self.screen.blit(self.font_small.render("TECH TREE", True, (255, 255, 255)), (640, 10))
+                pygame.draw.rect(self.screen, (100, 100, 200) if self.active_panel == "TECH" else (50, 50, 100), (720, 5, 140, 30))
+                self.screen.blit(self.font_small.render("TECH TREE", True, (255, 255, 255)), (740, 10))
                 
-                pygame.draw.rect(self.screen, (200, 100, 200) if self.active_panel == "CIVIC" else (100, 50, 100), (780, 5, 140, 30))
-                self.screen.blit(self.font_small.render("CIVIC TREE", True, (255, 255, 255)), (800, 10))
+                pygame.draw.rect(self.screen, (200, 100, 200) if self.active_panel == "CIVIC" else (100, 50, 100), (880, 5, 140, 30))
+                self.screen.blit(self.font_small.render("CIVIC TREE", True, (255, 255, 255)), (900, 10))
 
                 # ציור ה-UI התחתון
                 ui_rect = pygame.Rect(0, 600, 1024, 168)
