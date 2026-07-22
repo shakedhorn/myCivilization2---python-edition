@@ -46,6 +46,9 @@ class CivClient:
         self.start_time = time.time()
         self.games_list = []
         self.city_build_scroll_y = 0
+        self.active_panel = "MAP"
+        self.tree_scroll_y = 0
+        self.server_ip = ""
         self.server_ip = ""
 
     def send_net_msg(self, msg_dict):
@@ -184,7 +187,44 @@ class CivClient:
                     mx, my = pygame.mouse.get_pos()
                     
                     if my < 40:
-                        continue # Ignore clicks on the top UI
+                        if event.button == 1:
+                            if 500 <= mx <= 600:
+                                self.active_panel = "MAP"
+                            elif 620 <= mx <= 760:
+                                self.active_panel = "TECH"
+                            elif 780 <= mx <= 920:
+                                self.active_panel = "CIVIC"
+                        continue
+                        
+                    if self.active_panel in ["TECH", "CIVIC"] and 40 <= my < 600:
+                        if event.button == 4:
+                            self.tree_scroll_y = min(0, self.tree_scroll_y + 40)
+                        elif event.button == 5:
+                            self.tree_scroll_y -= 40
+                        elif event.button == 1:
+                            me = self.game_state.get("players", {}).get(self.my_id, {})
+                            # Card click logic
+                            card_height = 80
+                            card_margin = 10
+                            cols = 3
+                            items = []
+                            if self.active_panel == "TECH":
+                                items = list(GameData.TECHS.items())
+                            else:
+                                items = list(GameData.CIVICS.items())
+                                
+                            for i, (key, data) in enumerate(items):
+                                col = i % cols
+                                row = i // cols
+                                cx = 50 + col * 300
+                                cy = 120 + row * (card_height + card_margin) + self.tree_scroll_y
+                                rect = pygame.Rect(cx, cy, 280, card_height)
+                                if rect.collidepoint(mx, my):
+                                    if self.active_panel == "TECH":
+                                        self.send_net_msg({"type": "CHOOSE_RESEARCH", "tech": key})
+                                    else:
+                                        self.send_net_msg({"type": "CHOOSE_CIVIC", "civic": key})
+                        continue
                     
                     if my >= 600:
                         # לחיצה על ה-UI
@@ -230,9 +270,18 @@ class CivClient:
                                 all_producing = all(c.get("production_item") is not None for c in my_cities)
                                 
                                 if all_moved and all_producing:
-                                    end_btn_rect = pygame.Rect(800, 620, 180, 50)
-                                    if end_btn_rect.collidepoint(mx, my):
-                                        self.send_net_msg({"type": "END_TURN"})
+                                    if me.get("current_research") is None:
+                                        end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                                        if end_btn_rect.collidepoint(mx, my):
+                                            self.active_panel = "TECH"
+                                    elif me.get("current_civic") is None:
+                                        end_btn_rect = pygame.Rect(750, 620, 260, 50)
+                                        if end_btn_rect.collidepoint(mx, my):
+                                            self.active_panel = "CIVIC"
+                                    else:
+                                        end_btn_rect = pygame.Rect(800, 620, 180, 50)
+                                        if end_btn_rect.collidepoint(mx, my):
+                                            self.send_net_msg({"type": "END_TURN"})
                                 elif not all_producing:
                                     end_btn_rect = pygame.Rect(750, 620, 260, 50)
                                     if end_btn_rect.collidepoint(mx, my):
@@ -380,104 +429,161 @@ class CivClient:
                         self.draw_text_centered(g, y_offset, self.font_small, (200, 200, 200))
 
             elif self.state == "GAME" and self.game_state:
-                # ציור המפה והיחידות (כפי שעשינו קודם)
-                for y, row in enumerate(self.game_state["map"]):
-                    map_w = len(row)
-                    map_pixel_w = map_w * self.tile_size
-                    for x, tile in enumerate(row):
-                        screen_x = (x * self.tile_size - self.camera_x) % map_pixel_w
-                        if screen_x > map_pixel_w - self.tile_size: screen_x -= map_pixel_w
+                if self.active_panel == "MAP":
+                    # ציור המפה והיחידות (כפי שעשינו קודם)
+                    for y, row in enumerate(self.game_state["map"]):
+                        map_w = len(row)
+                        map_pixel_w = map_w * self.tile_size
+                        for x, tile in enumerate(row):
+                            screen_x = (x * self.tile_size - self.camera_x) % map_pixel_w
+                            if screen_x > map_pixel_w - self.tile_size: screen_x -= map_pixel_w
                         
-                        screen_y = y * self.tile_size - self.camera_y + 40
-                        if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
-                            color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
-                            pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
+                            screen_y = y * self.tile_size - self.camera_y + 40
+                            if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
+                                color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
+                                pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
                             
-                            imp = tile.get("improvement")
-                            if imp:
-                                imp_color = (50, 200, 50) if imp == "farm" else (100, 100, 100) if imp in ["mine", "quarry"] else (200, 200, 50) if imp == "pasture" else (0, 150, 200) if imp == "fishingBoats" else (200, 100, 50)
-                                pygame.draw.rect(self.screen, imp_color, (screen_x + 8, screen_y + 8, 16, 16))
-                                pygame.draw.rect(self.screen, (0, 0, 0), (screen_x + 8, screen_y + 8, 16, 16), 1)
+                                imp = tile.get("improvement")
+                                if imp:
+                                    imp_color = (50, 200, 50) if imp == "farm" else (100, 100, 100) if imp in ["mine", "quarry"] else (200, 200, 50) if imp == "pasture" else (0, 150, 200) if imp == "fishingBoats" else (200, 100, 50)
+                                    pygame.draw.rect(self.screen, imp_color, (screen_x + 8, screen_y + 8, 16, 16))
+                                    pygame.draw.rect(self.screen, (0, 0, 0), (screen_x + 8, screen_y + 8, 16, 16), 1)
                                 
-                            owner = tile.get("owner", -1)
-                            if owner != -1:
-                                p_color = self.game_state.get("players", {}).get(owner, {}).get("color", (255, 255, 255))
-                                border_thick = max(2, self.tile_size // 12)
+                                owner = tile.get("owner", -1)
+                                if owner != -1:
+                                    p_color = self.game_state.get("players", {}).get(owner, {}).get("color", (255, 255, 255))
+                                    border_thick = max(2, self.tile_size // 12)
                                 
-                                # Check Top
-                                if y == 0 or self.game_state["map"][y-1][x].get("owner", -1) != owner:
-                                    pygame.draw.rect(self.screen, p_color, (screen_x, screen_y, self.tile_size, border_thick))
-                                # Check Bottom
-                                if y == len(self.game_state["map"]) - 1 or self.game_state["map"][y+1][x].get("owner", -1) != owner:
-                                    pygame.draw.rect(self.screen, p_color, (screen_x, screen_y + self.tile_size - border_thick, self.tile_size, border_thick))
-                                # Check Left (wrap)
-                                lx = (x - 1) % map_w
-                                if self.game_state["map"][y][lx].get("owner", -1) != owner:
-                                    pygame.draw.rect(self.screen, p_color, (screen_x, screen_y, border_thick, self.tile_size))
-                                # Check Right (wrap)
-                                rx = (x + 1) % map_w
-                                if self.game_state["map"][y][rx].get("owner", -1) != owner:
-                                    pygame.draw.rect(self.screen, p_color, (screen_x + self.tile_size - border_thick, screen_y, border_thick, self.tile_size))
+                                    # Check Top
+                                    if y == 0 or self.game_state["map"][y-1][x].get("owner", -1) != owner:
+                                        pygame.draw.rect(self.screen, p_color, (screen_x, screen_y, self.tile_size, border_thick))
+                                    # Check Bottom
+                                    if y == len(self.game_state["map"]) - 1 or self.game_state["map"][y+1][x].get("owner", -1) != owner:
+                                        pygame.draw.rect(self.screen, p_color, (screen_x, screen_y + self.tile_size - border_thick, self.tile_size, border_thick))
+                                    # Check Left (wrap)
+                                    lx = (x - 1) % map_w
+                                    if self.game_state["map"][y][lx].get("owner", -1) != owner:
+                                        pygame.draw.rect(self.screen, p_color, (screen_x, screen_y, border_thick, self.tile_size))
+                                    # Check Right (wrap)
+                                    rx = (x + 1) % map_w
+                                    if self.game_state["map"][y][rx].get("owner", -1) != owner:
+                                        pygame.draw.rect(self.screen, p_color, (screen_x + self.tile_size - border_thick, screen_y, border_thick, self.tile_size))
                                 
-                            pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
+                                pygame.draw.rect(self.screen, (0, 0, 0, 30), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
-                # ציור ערים
-                map_w = len(self.game_state["map"][0]) if self.game_state.get("map") else 1
-                map_pixel_w = map_w * self.tile_size
-                for cid, city in self.game_state.get("cities", {}).items():
-                    screen_x = (city["x"] * self.tile_size - self.camera_x) % map_pixel_w
-                    if screen_x > map_pixel_w - self.tile_size: screen_x -= map_pixel_w
+                    # ציור ערים
+                    map_w = len(self.game_state["map"][0]) if self.game_state.get("map") else 1
+                    map_pixel_w = map_w * self.tile_size
+                    for cid, city in self.game_state.get("cities", {}).items():
+                        screen_x = (city["x"] * self.tile_size - self.camera_x) % map_pixel_w
+                        if screen_x > map_pixel_w - self.tile_size: screen_x -= map_pixel_w
                     
-                    screen_y = city["y"] * self.tile_size - self.camera_y + 40
-                    if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
-                        owner_color = self.game_state.get("players", {}).get(city.get("owner", ""), {}).get("color", (150, 150, 150))
-                        color = owner_color
-                        pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
-                        pygame.draw.rect(self.screen, (0, 0, 0), (screen_x, screen_y, self.tile_size, self.tile_size), 2)
+                        screen_y = city["y"] * self.tile_size - self.camera_y + 40
+                        if -self.tile_size < screen_x < 1024 and -self.tile_size < screen_y < 600:
+                            owner_color = self.game_state.get("players", {}).get(city.get("owner", ""), {}).get("color", (150, 150, 150))
+                            color = owner_color
+                            pygame.draw.rect(self.screen, color, (screen_x, screen_y, self.tile_size, self.tile_size))
+                            pygame.draw.rect(self.screen, (0, 0, 0), (screen_x, screen_y, self.tile_size, self.tile_size), 2)
                         
-                        b_colors = {
-                            "monument": (100, 100, 255),
-                            "granary": (255, 200, 0),
-                            "library": (0, 255, 255),
-                            "waterMill": (50, 50, 200)
-                        }
-                        buildings = city.get("buildings", [])
-                        b_idx = 0
-                        for b in buildings:
-                            if b == "cityCenter": continue
-                            bc = b_colors.get(b, (200, 200, 200))
-                            bx = screen_x + 2 + (b_idx * 8) % (self.tile_size - 8)
-                            by = screen_y + self.tile_size - 8
-                            pygame.draw.rect(self.screen, bc, (bx, by, 6, 6))
-                            pygame.draw.rect(self.screen, (0, 0, 0), (bx, by, 6, 6), 1)
-                            b_idx += 1
+                            b_colors = {
+                                "monument": (100, 100, 255),
+                                "granary": (255, 200, 0),
+                                "library": (0, 255, 255),
+                                "waterMill": (50, 50, 200)
+                            }
+                            buildings = city.get("buildings", [])
+                            b_idx = 0
+                            for b in buildings:
+                                if b == "cityCenter": continue
+                                bc = b_colors.get(b, (200, 200, 200))
+                                bx = screen_x + 2 + (b_idx * 8) % (self.tile_size - 8)
+                                by = screen_y + self.tile_size - 8
+                                pygame.draw.rect(self.screen, bc, (bx, by, 6, 6))
+                                pygame.draw.rect(self.screen, (0, 0, 0), (bx, by, 6, 6), 1)
+                                b_idx += 1
                             
-                        if self.selected_city_id == cid:
-                            pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
+                            if self.selected_city_id == cid:
+                                pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
 
 
-                for uid, u in self.game_state["units"].items():
-                    base_color = self.game_state.get("players", {}).get(u.get("owner", ""), {}).get("color", (255, 255, 255))
-                    color = base_color
-                    if u["owner"] == self.my_id and u.get("has_moved", False):
-                        color = (max(0, base_color[0] - 100), max(0, base_color[1] - 100), max(0, base_color[2] - 100)) # Darker if moved
+                    for uid, u in self.game_state["units"].items():
+                        base_color = self.game_state.get("players", {}).get(u.get("owner", ""), {}).get("color", (255, 255, 255))
+                        color = base_color
+                        if u["owner"] == self.my_id and u.get("has_moved", False):
+                            color = (max(0, base_color[0] - 100), max(0, base_color[1] - 100), max(0, base_color[2] - 100)) # Darker if moved
                         
-                    ux_screen = (u["x"] * self.tile_size - self.camera_x) % map_pixel_w
-                    if ux_screen > map_pixel_w - self.tile_size: ux_screen -= map_pixel_w
+                        ux_screen = (u["x"] * self.tile_size - self.camera_x) % map_pixel_w
+                        if ux_screen > map_pixel_w - self.tile_size: ux_screen -= map_pixel_w
                     
-                    pos = (ux_screen + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
-                    if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
-                        pygame.draw.circle(self.screen, color, pos, 15)
+                        pos = (ux_screen + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
+                        if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
+                            pygame.draw.circle(self.screen, color, pos, 15)
                         
-                        u_type = u.get("type", "?")
-                        char_surf = self.font_small.render(u_type[0].upper(), True, (0, 0, 0))
-                        char_rect = char_surf.get_rect(center=pos)
-                        self.screen.blit(char_surf, char_rect)
+                            u_type = u.get("type", "?")
+                            char_surf = self.font_small.render(u_type[0].upper(), True, (0, 0, 0))
+                            char_rect = char_surf.get_rect(center=pos)
+                            self.screen.blit(char_surf, char_rect)
                         
-                        # סימון יחידה נבחרת בריבוע לבן
-                        if self.selected_unit_id == uid:
-                            pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
+                            # סימון יחידה נבחרת בריבוע לבן
+                            if self.selected_unit_id == uid:
+                                pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
                             
+
+                elif self.active_panel in ["TECH", "CIVIC"]:
+                    pygame.draw.rect(self.screen, (20, 20, 30), (0, 40, 1024, 560))
+                    title = "Science Tree" if self.active_panel == "TECH" else "Civic Tree"
+                    self.draw_text_centered(title, 60 + self.tree_scroll_y, self.font_main, (255, 255, 255))
+                    
+                    me = self.game_state.get("players", {}).get(self.my_id, {})
+                    my_techs = me.get("techs", [])
+                    my_civics = me.get("civics", [])
+                    current_res = me.get("current_research") if self.active_panel == "TECH" else me.get("current_civic")
+                    res_prog = me.get("research_progress", 0) if self.active_panel == "TECH" else me.get("civic_progress", 0)
+                    
+                    items = list(GameData.TECHS.items()) if self.active_panel == "TECH" else list(GameData.CIVICS.items())
+                    card_height = 80
+                    card_margin = 10
+                    cols = 3
+                    
+                    for i, (key, data) in enumerate(items):
+                        col = i % cols
+                        row = i // cols
+                        cx = 50 + col * 300
+                        cy = 120 + row * (card_height + card_margin) + self.tree_scroll_y
+                        rect = pygame.Rect(cx, cy, 280, card_height)
+                        
+                        is_unlocked = key in my_techs or key in my_civics
+                        is_researching = current_res == key
+                        
+                        reqs = data.get("required_techs", []) if self.active_panel == "TECH" else data.get("required_civics", [])
+                        can_research = all(r in (my_techs if self.active_panel == "TECH" else my_civics) for r in reqs) and not is_unlocked
+                        
+                        bg_color = (40, 40, 50)
+                        border_color = (100, 100, 100)
+                        if is_unlocked:
+                            bg_color = (50, 100, 50)
+                            border_color = (100, 255, 100)
+                        elif is_researching:
+                            bg_color = (50, 50, 150)
+                            border_color = (100, 100, 255)
+                        elif can_research:
+                            bg_color = (80, 80, 80)
+                            border_color = (200, 200, 200)
+                            
+                        pygame.draw.rect(self.screen, bg_color, rect)
+                        pygame.draw.rect(self.screen, border_color, rect, 2)
+                        
+                        self.screen.blit(self.font_small.render(data["name"], True, (255, 255, 255)), (cx + 10, cy + 10))
+                        
+                        cost = data.get("science_cost", 0) if self.active_panel == "TECH" else data.get("culture_cost", 0)
+                        if is_researching:
+                            self.screen.blit(self.font_small.render(f"Progress: {int(res_prog)}/{cost}", True, (200, 200, 255)), (cx + 10, cy + 40))
+                        elif not is_unlocked:
+                            self.screen.blit(self.font_small.render(f"Cost: {cost}", True, (200, 200, 200)), (cx + 10, cy + 40))
+                        else:
+                            self.screen.blit(self.font_small.render("Unlocked", True, (150, 255, 150)), (cx + 10, cy + 40))
+
+
                 # ציור Top UI
                 me = self.game_state.get("players", {}).get(self.my_id, {})
                 my_color = me.get("color", (40, 40, 60))
@@ -488,9 +594,19 @@ class CivClient:
                 pygame.draw.rect(self.screen, bg_color, top_rect)
                 turn = self.game_state.get("turn", 1)
                 
-                top_text = f"Turn: {turn}   |   Gold: {me.get('gold',0)} (+{me.get('last_gold_income',0)})   |   Science: {me.get('science',0)} (+{me.get('last_science_income',0)})   |   Culture: {me.get('culture',0)} (+{me.get('last_culture_income',0)})"
+                top_text = f"Turn: {turn}  |  Gold: {int(me.get('gold',0))}  |  Science: +{me.get('last_science_income',0)}  |  Culture: +{me.get('last_culture_income',0)}"
                 top_surf = self.font_main.render(top_text, True, (255, 255, 255))
-                self.screen.blit(top_surf, (20, 5))
+                self.screen.blit(top_surf, (10, 5))
+                
+                # Top Bar Buttons
+                pygame.draw.rect(self.screen, (100, 100, 100) if self.active_panel == "MAP" else (50, 50, 50), (500, 5, 100, 30))
+                self.screen.blit(self.font_small.render("MAP", True, (255, 255, 255)), (530, 10))
+                
+                pygame.draw.rect(self.screen, (100, 100, 200) if self.active_panel == "TECH" else (50, 50, 100), (620, 5, 140, 30))
+                self.screen.blit(self.font_small.render("TECH TREE", True, (255, 255, 255)), (640, 10))
+                
+                pygame.draw.rect(self.screen, (200, 100, 200) if self.active_panel == "CIVIC" else (100, 50, 100), (780, 5, 140, 30))
+                self.screen.blit(self.font_small.render("CIVIC TREE", True, (255, 255, 255)), (800, 10))
 
                 # ציור ה-UI התחתון
                 ui_rect = pygame.Rect(0, 600, 1024, 168)
@@ -574,15 +690,22 @@ class CivClient:
                         pygame.draw.rect(self.screen, (40, 40, 50), right_rect)
                         pygame.draw.rect(self.screen, (100, 100, 120), right_rect, 2)
                         
-                        base_options = [
-                            ("Warrior", "unit", "warrior"),
-                            ("Slinger", "unit", "slinger"),
-                            ("Settler", "unit", "settler"),
-                            ("Builder", "unit", "builder"),
-                            ("Monument", "building", "monument"),
-                            ("Granary", "building", "granary")
-                        ]
-                        options = [o for o in base_options if o[1] != "building" or o[2] not in city.get("buildings", [])]
+                        my_techs = me.get("techs", [])
+                        my_civics = me.get("civics", [])
+                        options = []
+                        for uid, u_stats in GameData.UNITS.items():
+                            if u_stats["requiredTech"] and u_stats["requiredTech"] not in my_techs: continue
+                            if u_stats["UpgradeTo"]:
+                                upg_tech = GameData.UNITS[u_stats["UpgradeTo"]]["requiredTech"]
+                                if upg_tech and upg_tech in my_techs: continue
+                            options.append((u_stats["name"], "unit", uid))
+                            
+                        for bid, b_stats in GameData.BUILDINGS.items():
+                            if bid in city.get("buildings", []): continue
+                            if b_stats["requiredTech"] and b_stats["requiredTech"] not in my_techs: continue
+                            if b_stats["requiredCivic"] and b_stats["requiredCivic"] not in my_civics: continue
+                            if b_stats["requiredBefore"] and b_stats["requiredBefore"] not in city.get("buildings", []): continue
+                            options.append((b_stats["name"], "building", bid))
                         
                         old_clip = self.screen.get_clip()
                         self.screen.set_clip(right_rect)

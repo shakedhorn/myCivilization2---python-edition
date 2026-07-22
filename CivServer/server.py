@@ -41,7 +41,9 @@ class GameServer:
                         
                         self.game.players[player_id] = {
                             "name": username, "gold": 50, "science": 0, "culture": 0, "production": 0,
-                            "techs": ["pottery", "mining", "animalHusbandry", "sailing", "irrigation", "construction"], "civics": [], "ended_turn": False,
+                            "techs": [], "civics": [], "ended_turn": False,
+                            "current_research": None, "research_progress": 0,
+                            "current_civic": None, "civic_progress": 0,
                             "color": assigned_color
                         }
                         # Find a valid land tile for starting spawn

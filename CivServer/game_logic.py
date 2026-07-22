@@ -125,8 +125,50 @@ class GameState:
             return self._change_production(player_id, data)
         elif cmd_type == "BUILD_IMPROVEMENT":
             return self._build_improvement(player_id, data)
+        elif cmd_type == "CHOOSE_RESEARCH":
+            return self._choose_research(player_id, data)
+        elif cmd_type == "CHOOSE_CIVIC":
+            return self._choose_civic(player_id, data)
         # כאן יכנסו כל שאר הפקודות (BUILD_BUILDING, ADOPT_CIVIC וכו')
         return False
+        
+    def _choose_research(self, p_id, data):
+        tech_name = data.get("tech")
+        player = self.players.get(p_id)
+        if not player or not tech_name: return False
+        
+        # Check if tech is valid and player has prerequisites
+        tech_data = GameData.TECHS.get(tech_name)
+        if not tech_data: return False
+        
+        for req in tech_data.get("required_techs", []):
+            if req not in player.get("techs", []):
+                return False
+                
+        if tech_name in player.get("techs", []):
+            return False # already researched
+            
+        player["current_research"] = tech_name
+        return True
+
+    def _choose_civic(self, p_id, data):
+        civic_name = data.get("civic")
+        player = self.players.get(p_id)
+        if not player or not civic_name: return False
+        
+        # Check if civic is valid and player has prerequisites
+        civic_data = GameData.CIVICS.get(civic_name)
+        if not civic_data: return False
+        
+        for req in civic_data.get("required_civics", []):
+            if req not in player.get("civics", []):
+                return False
+                
+        if civic_name in player.get("civics", []):
+            return False # already researched
+            
+        player["current_civic"] = civic_name
+        return True
 
     def _build_improvement(self, p_id, data):
         u_id = str(data.get("unit_id"))
@@ -310,8 +352,30 @@ class GameState:
                     
         for p_id, p in self.players.items():
             p["gold"] += p.get("last_gold_income", 0)
-            p["science"] += p.get("last_science_income", 0)
-            p["culture"] += p.get("last_culture_income", 0)
+            science_inc = p.get("last_science_income", 0)
+            culture_inc = p.get("last_culture_income", 0)
+            p["science"] += science_inc
+            p["culture"] += culture_inc
+            
+            # Process research
+            if p.get("current_research"):
+                tech_data = GameData.TECHS.get(p["current_research"])
+                if tech_data:
+                    p["research_progress"] = p.get("research_progress", 0) + science_inc
+                    if p["research_progress"] >= tech_data["science_cost"]:
+                        p.setdefault("techs", []).append(p["current_research"])
+                        p["research_progress"] -= tech_data["science_cost"]
+                        p["current_research"] = None
+            
+            # Process civics
+            if p.get("current_civic"):
+                civic_data = GameData.CIVICS.get(p["current_civic"])
+                if civic_data:
+                    p["civic_progress"] = p.get("civic_progress", 0) + culture_inc
+                    if p["civic_progress"] >= civic_data["culture_cost"]:
+                        p.setdefault("civics", []).append(p["current_civic"])
+                        p["civic_progress"] -= civic_data["culture_cost"]
+                        p["current_civic"] = None
             
         for u in self.units.values():
             u["has_moved"] = False
