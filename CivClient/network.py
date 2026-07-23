@@ -46,6 +46,33 @@ class Network:
             self.sock.close()
             self.sock = None
 
+    def recv_json(self):
+        if not self.sock: 
+            return None
+        try:
+            resp_raw = self.sock.recv(1024)
+            if resp_raw:
+                return json.loads(resp_raw.decode())
+        except Exception as e:
+            print("Net recv error:", e)
+        return None
+
+    def recv_prefixed_json(self):
+        if not self.sock: return None
+        try:
+            raw_len = self.sock.recv(4)
+            if not raw_len: return None
+            msg_len = int.from_bytes(raw_len, 'big')
+            data = b""
+            while len(data) < msg_len:
+                packet = self.sock.recv(msg_len - len(data))
+                if not packet: return None
+                data += packet
+            return json.loads(data.decode())
+        except Exception as e:
+            print("Net prefixed recv error:", e)
+        return None
+
     def network_loop(self):
         while True:
             try:

@@ -1,6 +1,8 @@
 class Player:
-    def __init__(self, player_id):
+    def __init__(self, player_id, name="Unknown", color=(255, 255, 255)):
         self.id = player_id
+        self.name = name
+        self.color = color
         self.gold = 100
         self.science = 0
         self.culture = 0

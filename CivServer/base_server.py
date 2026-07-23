@@ -43,7 +43,7 @@ class BaseServer:
                 # Just acknowledge login and send game list
                 self.send_response(conn, {"status": "LOGIN_OK", "games": list(self.games.keys())})
             
-            elif cmd == "CREATE_GAME":
+            elif cmd == "JOIN_OR_CREATE":
                 game_name = msg.get("name")
                 if not game_name:
                     self.send_response(conn, {"status": "ERROR", "message": "Game name required"})
@@ -51,12 +51,13 @@ class BaseServer:
                 
                 with self.lock:
                     if game_name in self.games:
-                        self.send_response(conn, {"status": "ERROR", "message": "Game already exists"})
+                        # Game exists -> Join it!
+                        self.send_response(conn, {"status": "JOIN_SUCCESS", "port": self.games[game_name]})
                     else:
+                        # Game does not exist -> Create it!
                         port = self.next_port
                         self.next_port += 1
                         
-                        # Start game server
                         gs = GameServer(port=port)
                         t = threading.Thread(target=gs.start, daemon=True)
                         t.start()
@@ -65,15 +66,6 @@ class BaseServer:
                         self.game_threads[game_name] = t
                         
                         self.send_response(conn, {"status": "JOIN_SUCCESS", "port": port})
-            
-            elif cmd == "JOIN_GAME":
-                game_name = msg.get("name")
-                with self.lock:
-                    if game_name in self.games:
-                        port = self.games[game_name]
-                        self.send_response(conn, {"status": "JOIN_SUCCESS", "port": port})
-                    else:
-                        self.send_response(conn, {"status": "ERROR", "message": "Game not found"})
             else:
                 self.send_response(conn, {"status": "ERROR", "message": "Unknown command"})
                 

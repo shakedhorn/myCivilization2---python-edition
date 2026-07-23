@@ -15,7 +15,8 @@ class GameLogic:
         self.cities = {}
         self.next_unit_id = 1
         self.next_city_id = 1
-        self.world = World(width, height, self._generate_map())
+        self.world = World(width, height)
+        self.world.map_data = self._generate_map()
 
     def _generate_map(self):
         # 1. Initialize world with Ocean

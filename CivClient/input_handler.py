@@ -36,10 +36,10 @@ class InputHandler:
                         game_name = app.input_text
                         try:
                             app.network.connect(app.server_ip, 54321)
-                            if game_name in app.games_list:
-                                app.network.send_net_msg({"type": "JOIN_GAME", "name": game_name})
-                            else:
-                                app.network.send_net_msg({"type": "CREATE_GAME", "name": game_name})
+                            import json
+                            # Let the server decide whether to join or create
+                            msg_dict = {"type": "JOIN_OR_CREATE", "name": game_name}
+                            app.network.sock.sendall(json.dumps(msg_dict).encode())
                             
                             resp = app.network.recv_json()
                             if resp and resp.get("status") == "JOIN_SUCCESS":
@@ -47,14 +47,15 @@ class InputHandler:
                                 app.network.close()
                                 app.network.connect(app.server_ip, port)
                                 app.network.send_net_msg({"type": "LOGIN", "user": app.username})
-                                game_resp = app.network.recv_json()
+                                game_resp = app.network.recv_prefixed_json()
                                 
                                 if game_resp and game_resp.get("status") == "LOGIN_OK":
                                     app.my_id = str(game_resp["id"])
                                     app.state = "GAME"
                                     threading.Thread(target=app.network.network_loop, daemon=True).start()
                             else:
-                                app.input_text = "ERROR: FAILED"
+                                err_msg = resp.get("message", "SERVER DISCONNECTED") if resp else "SERVER DISCONNECTED"
+                                app.input_text = f"ERROR: {err_msg}"
                                 app.network.close()
                         except Exception as e:
                             app.input_text = f"CONN ERROR: {e}"

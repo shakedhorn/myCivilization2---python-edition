@@ -44,8 +44,8 @@ class GameServer:
                     spawn_x, spawn_y = 5, 5
                     for _ in range(100):
                         sx, sy = random.randint(2, self.game.world.width - 3), random.randint(2, self.game.world.height - 3)
-                        tile = self.game.world.tiles[sy][sx]
-                        if tile.terrain not in ["ocean", "coast", "mountains"]:
+                        tile = self.game.world.map_data[sy][sx]
+                        if tile.get("terrain") not in ["ocean", "coast", "mountains"]:
                             spawn_x, spawn_y = sx, sy
                             break
                             
@@ -127,7 +127,8 @@ class GameServer:
                         new_player.gold = 50
                         self.game.players[player_id] = new_player
                 
-                conn.sendall(json.dumps({"status": "LOGIN_OK", "id": player_id}).encode())
+                resp = json.dumps({"status": "LOGIN_OK", "id": player_id}).encode()
+                conn.sendall(len(resp).to_bytes(4, 'big') + resp)
             else:
                 conn.sendall(json.dumps({"status": "ERROR"}).encode())
                 return
@@ -194,10 +195,13 @@ class GameServer:
             print(f"Error with player {player_id}: {e}")
         finally:
             if player_id and player_id in self.game.players:
-                self.game.players[player_id].eliminated = True
-                active_players = [p_id for p_id, p in self.game.players.items() if not p.eliminated]
-                if len(active_players) == 1:
-                    self.game.players[active_players[0]].winner = "Domination"
+                if getattr(self, "game_started", False) and self.game.turn_count > 1:
+                    self.game.players[player_id].eliminated = True
+                    active_players = [p_id for p_id, p in self.game.players.items() if not p.eliminated]
+                    if len(active_players) == 1:
+                        self.game.players[active_players[0]].winner = "Domination"
+                else:
+                    del self.game.players[player_id]
             conn.close()
 
     def start(self):
