@@ -52,6 +52,7 @@ class InputHandler:
                                 if game_resp and game_resp.get("status") == "LOGIN_OK":
                                     app.my_id = str(game_resp["id"])
                                     app.state = "GAME"
+                                    app.camera_initialized = False
                                     threading.Thread(target=app.network.network_loop, daemon=True).start()
                             else:
                                 err_msg = resp.get("message", "SERVER DISCONNECTED") if resp else "SERVER DISCONNECTED"
@@ -75,11 +76,13 @@ class InputHandler:
                     app.camera_x -= event.rel[0]
                     app.camera_y -= event.rel[1]
                     
-                    if "map" in app.game_state:
-                        map_pixel_w = len(app.game_state["map"][0]) * app.tile_size
-                        map_height = len(app.game_state["map"]) * app.tile_size
+                    map_data = app.game_state.get("world", {}).get("map_data", [])
+                    if map_data:
+                        map_pixel_w = len(map_data[0]) * app.tile_size
+                        map_height = len(map_data) * app.tile_size
+                        max_x = max(0, map_pixel_w - 1024)
                         max_y = max(0, map_height - 560)
-                        app.camera_x %= map_pixel_w
+                        app.camera_x = max(0, min(app.camera_x, max_x))
                         app.camera_y = max(0, min(app.camera_y, max_y))
                         
             elif event.type == pygame.MOUSEBUTTONDOWN and app.state == "GAME" and app.game_state and app.game_state.get("game_started", False):
@@ -320,7 +323,7 @@ class InputHandler:
 
     def handle_keys_held(self):
         app = self.app
-        if app.state == "GAME" and app.game_state and "map" in app.game_state:
+        if app.state == "GAME" and app.game_state and app.game_state.get("world", {}).get("map_data"):
             keys = pygame.key.get_pressed()
             scroll_speed = 20
             if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -332,9 +335,12 @@ class InputHandler:
             if keys[pygame.K_DOWN] or keys[pygame.K_s]:
                 app.camera_y += scroll_speed
                 
-            map_pixel_w = len(app.game_state["map"][0]) * app.tile_size
-            map_height = len(app.game_state["map"]) * app.tile_size
-            max_y = max(0, map_height - 560)
-            
-            app.camera_x %= map_pixel_w
-            app.camera_y = max(0, min(app.camera_y, max_y))
+            map_data = app.game_state.get("world", {}).get("map_data", [])
+            if map_data:
+                map_pixel_w = len(map_data[0]) * app.tile_size
+                map_height = len(map_data) * app.tile_size
+                max_x = max(0, map_pixel_w - 1024)
+                max_y = max(0, map_height - 560)
+                
+                app.camera_x = max(0, min(app.camera_x, max_x))
+                app.camera_y = max(0, min(app.camera_y, max_y))

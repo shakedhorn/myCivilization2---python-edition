@@ -52,8 +52,23 @@ class GameServer:
                     # Spawn initial settler
                     unit_id = str(self.game.next_unit_id)
                     from CivServer.models.unit import Unit
-                    self.game.units[unit_id] = Unit(unit_id, "settler", p_id, spawn_x, spawn_y)
+                    self.game.units[unit_id] = Unit(unit_id, "settler", spawn_x, spawn_y, p_id)
                     self.game.next_unit_id += 1
+                    
+                    # 7x7 Starting Vision
+                    p = self.game.players[p_id]
+                    if not hasattr(p, 'explored_tiles'): p.explored_tiles = []
+                    explored_set = set(tuple(x) for x in p.explored_tiles)
+                    
+                    sight = 3
+                    for dy in range(-sight, sight + 1):
+                        for dx in range(-sight, sight + 1):
+                            if dx*dx + dy*dy <= 12: # rough 7x7 circle
+                                nx = (spawn_x + dx) % self.game.world.width
+                                ny = spawn_y + dy
+                                if 0 <= ny < self.game.world.height:
+                                    explored_set.add((nx, ny))
+                    p.explored_tiles = list(explored_set)
 
     def filter_fow(self, state, player_id):
         if not getattr(self, "game_started", False):
@@ -195,13 +210,14 @@ class GameServer:
             print(f"Error with player {player_id}: {e}")
         finally:
             if player_id and player_id in self.game.players:
-                if getattr(self, "game_started", False) and self.game.turn_count > 1:
+                if not getattr(self, "game_started", False):
+                    # Only delete from lobby if the game hasn't started yet
+                    del self.game.players[player_id]
+                elif self.game.turn_count > 1:
                     self.game.players[player_id].eliminated = True
                     active_players = [p_id for p_id, p in self.game.players.items() if not p.eliminated]
                     if len(active_players) == 1:
                         self.game.players[active_players[0]].winner = "Domination"
-                else:
-                    del self.game.players[player_id]
             conn.close()
 
     def start(self):

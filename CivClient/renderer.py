@@ -131,6 +131,14 @@ class Renderer:
         if map_h == 0: return
         map_w = len(map_data[0])
         map_pixel_w = map_w * app.tile_size
+        
+        if not getattr(app, "camera_initialized", False) and app.game_state.get("units"):
+            for uid, u in app.game_state["units"].items():
+                if u.get("owner") == app.my_id:
+                    app.camera_x = u["x"] * app.tile_size - 1024 // 2
+                    app.camera_y = max(0, min(u["y"] * app.tile_size - 600 // 2, map_h * app.tile_size - 560))
+                    app.camera_initialized = True
+                    break
 
         # CAMERA CULLING for terrain
         start_y = max(0, int((app.camera_y - 40) // app.tile_size))
@@ -326,11 +334,8 @@ class Renderer:
                 # So let's memoize it here using font sizes
                 font_size = max(8, app.tile_size // 2)
                 font_key = ("Arial", font_size, bold:=False)
-                # Instead of making a font every time, we should cache it or just reuse font_small
-                # I'll just use font_small for simplicity if it fits, else cache it.
-                # Just draw it fast
                 dynamic_font = self.get_dynamic_font(font_size)
-                char_surf, _ = self.get_cached_text(u_type[0].upper(), dynamic_font, (0, 0, 0), shadow=False)
+                _, char_surf = self.get_cached_text(u_type[0].upper(), dynamic_font, (0, 0, 0), shadow=False)
                 char_rect = char_surf.get_rect(center=pos)
                 self.screen.blit(char_surf, char_rect)
             

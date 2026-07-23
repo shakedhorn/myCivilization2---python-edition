@@ -115,7 +115,6 @@ class GameLogic:
                 stats = GameData.UNITS.get(u.type)
                 if stats and "sight" in stats:
                     sight = stats["sight"]
-                elif u.type == "scout": sight = 3
                 
                 for dy in range(-sight, sight + 1):
                     for dx in range(-sight, sight + 1):
@@ -445,9 +444,9 @@ class GameLogic:
                             "type": unit_type, "owner": c_owner,
                             "x": city.x, "y": city.y, "hp": 100, "has_moved": False
                         }
-                        if unit_type == "builder":
-                            new_unit.charges = 3
-                        self.units[str(self.next_unit_id)] = new_unit
+                        from CivServer.models.unit import Unit
+                        new_unit_obj = Unit(str(self.next_unit_id), unit_type, city.x, city.y, c_owner)
+                        self.units[str(self.next_unit_id)] = new_unit_obj
                         self.next_unit_id += 1
                     elif prod_item["category"] == "building":
                         if prod_item["name"] not in city.buildings:
@@ -599,7 +598,7 @@ class GameLogic:
         u_id = str(data.get("unit_id"))
         unit = self.units.get(u_id)
         if unit and unit.type == "settler" and unit.owner == p_id:
-            city_id = f"city_{unit['x']}_{unit['y']}"
+            city_id = f"city_{unit.x}_{unit.y}"
             # Claim 3x3 starting territory
             owned_tiles = []
             cx, cy = unit.x, unit.y
@@ -611,19 +610,11 @@ class GameLogic:
                             self.world.map_data[ny][nx]["owner"] = p_id
                             owned_tiles.append((nx, ny))
             
-            self.cities[city_id] = {
-                "x": cx, "y": cy,
-                "owner": p_id, "hp": 200, "has_walls": False,
-                "name": f"City of Player {p_id}",
-                "population": 1,
-                "stored_food": 0,
-                "stored_production": 0,
-                "production_item": None,
-                "buildings": ["cityCenter"],
-                "owned_tiles": owned_tiles,
-                "worked_tiles": [],
-                "border_progress": 0
-            }
+            from CivServer.models.city import City
+            new_city = City(city_id, f"City of Player {p_id}", cx, cy, p_id)
+            new_city.owned_tiles = owned_tiles
+            self.cities[city_id] = new_city
+            
             del self.units[u_id] # מחיקת המתיישב
             return True
         return False

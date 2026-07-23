@@ -55,7 +55,7 @@ class GameData:
         "battleship": { "gold_cost": 0, "production_cost": 279, "movement": 5, "melee": 70, "sight": 3, "name": "Battleship", "type": "Naval", "range": 2, "UpgradeTo": "missileCruiser", "requiredTech": "steel", "isNaval": True },
         "missileCruiser": { "gold_cost": 0, "production_cost": 442, "movement": 6, "melee": 85, "sight": 3, "name": "Missile Cruiser", "type": "Naval", "range": 2, "UpgradeTo": None, "requiredTech": "guidanceSystems", "isNaval": True },
         # ===== SUPPORT / CIVILIAN =====
-        "settler": { "gold_cost": 0, "production_cost": 30, "movement": 2, "melee": 0, "sight": 2, "name": "Settler", "type": "Civilian", "range": 0, "UpgradeTo": None, "requiredTech": None, "isNaval": False },
+        "settler": { "gold_cost": 0, "production_cost": 30, "movement": 2, "melee": 0, "sight": 3, "name": "Settler", "type": "Civilian", "range": 0, "UpgradeTo": None, "requiredTech": None, "isNaval": False },
         "builder": { "gold_cost": 0, "production_cost": 32, "movement": 2, "melee": 0, "sight": 2, "name": "Builder", "type": "Civilian", "range": 0, "UpgradeTo": None, "requiredTech": None, "isNaval": False },
         "scout": { "gold_cost": 0, "production_cost": 19, "movement": 3, "melee": 10, "sight": 3, "name": "Scout", "type": "Recon", "range": 0, "UpgradeTo": "skirmisher", "requiredTech": None, "isNaval": False },
         "skirmisher": { "gold_cost": 0, "production_cost": 97, "movement": 3, "melee": 20, "sight": 3, "name": "Skirmisher", "type": "Recon", "range": 0, "UpgradeTo": "ranger", "requiredTech": "machinery", "isNaval": False },
