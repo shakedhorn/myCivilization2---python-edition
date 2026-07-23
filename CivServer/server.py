@@ -113,6 +113,11 @@ class GameServer:
         except Exception as e:
             print(f"Error with player {player_id}: {e}")
         finally:
+            if player_id and player_id in self.game.players:
+                self.game.players[player_id]["eliminated"] = True
+                active_players = [p_id for p_id, p in self.game.players.items() if not p.get("eliminated")]
+                if len(active_players) == 1:
+                    self.game.players[active_players[0]]["winner"] = "Domination"
             conn.close()
 
     def start(self):

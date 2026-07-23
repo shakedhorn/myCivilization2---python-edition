@@ -45,6 +45,7 @@ class CivClient:
         self.start_time = time.time()
         self.games_list = []
         self.city_build_scroll_y = 0
+        self.current_prod_list_len = 0
         self.active_panel = "MAP"
         self.tree_scroll_y = 0
         self.tree_scroll_x = 0
@@ -74,8 +75,8 @@ class CivClient:
         for k, t in tiers.items():
             tier_groups.setdefault(t, []).append(k)
             
-        card_w, card_h = 240, 140
-        margin_x, margin_y = 60, 20
+        card_w, card_h = 200, 115
+        margin_x, margin_y = 100, 20
         
         current_x = 50
         for t in sorted(tier_groups.keys()):
@@ -88,7 +89,7 @@ class CivClient:
                     return sum(layout[r][1] for r in valid_reqs) / len(valid_reqs)
                 items_in_tier.sort(key=avg_parent_y)
                 
-            max_per_col = 3
+            max_per_col = 4
             num_items = len(items_in_tier)
             
             for idx, key in enumerate(items_in_tier):
@@ -96,7 +97,7 @@ class CivClient:
                 row_idx = idx % max_per_col
                 
                 cx = current_x + (col_offset * (card_w + 20))
-                cy = 120 + row_idx * (card_h + margin_y)
+                cy = 80 + row_idx * (card_h + margin_y)
                 layout[key] = (cx, cy)
                 
             cols_needed = math.ceil(num_items / max_per_col) if num_items > 0 else 1
@@ -218,6 +219,9 @@ class CivClient:
                         else:
                             self.input_text = "ERROR: " + resp.get("message", "FAILED")
                     elif event.key == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
+                    elif event.key == pygame.K_ESCAPE:
+                        self.target_mode = None
+                        self.target_building = None
                     elif event.key == pygame.K_SPACE and self.state == "GAME" and self.game_state and self.game_state.get("game_started", False):
                         if self.selected_unit_id:
                             self.send_net_msg({"type": "SKIP_UNIT_TURN", "unit_id": self.selected_unit_id})
@@ -261,13 +265,24 @@ class CivClient:
                                 self.tree_scroll_y -= 40
                             else:
                                 self.tree_scroll_x -= 40
+                        
+                        if event.button in [4, 5]:
+                            is_tech = (self.active_panel == "TECH")
+                            items = GameData.TECHS if is_tech else GameData.CIVICS
+                            layout = self.get_tree_layout(items, is_tech)
+                            max_x = max([pos[0] for pos in layout.values()]) if layout else 0
+                            scroll_limit = -max(0, max_x - 700)
+                            
+                            self.tree_scroll_y = max(-3000, min(0, self.tree_scroll_y))
+                            self.tree_scroll_x = max(scroll_limit, min(0, self.tree_scroll_x))
+                            
                         elif event.button == 1:
                             is_tech = (self.active_panel == "TECH")
                             items = GameData.TECHS if is_tech else GameData.CIVICS
                             layout = self.get_tree_layout(items, is_tech)
                             
                             for key, (cx, cy) in layout.items():
-                                rect = pygame.Rect(cx + self.tree_scroll_x, cy + self.tree_scroll_y, 240, 140)
+                                rect = pygame.Rect(cx + self.tree_scroll_x, cy + self.tree_scroll_y, 200, 115)
                                 if rect.collidepoint(mx, my):
                                     if is_tech:
                                         self.send_net_msg({"type": "CHOOSE_RESEARCH", "tech": key})
@@ -358,6 +373,20 @@ class CivClient:
                                 if u_stats["UpgradeTo"]:
                                     upg_tech = GameData.UNITS[u_stats["UpgradeTo"]]["requiredTech"]
                                     if upg_tech and upg_tech in my_techs: continue
+                                    
+                                if u_stats.get("isNaval", False):
+                                    has_water = False
+                                    if "harbor" in city.get("buildings", []):
+                                        has_water = True
+                                    else:
+                                        for ox, oy in city.get("owned_tiles", []):
+                                            if 0 <= oy < len(self.game_state["map"]):
+                                                tt = self.game_state["map"][oy][ox]["terrain"]
+                                                if GameData.TERRAIN.get(tt, {}).get("isWater", False):
+                                                    has_water = True
+                                                    break
+                                    if not has_water: continue
+                                    
                                 options.append((u_stats["name"], "unit", uid))
                                 
                             for bid, b_stats in GameData.BUILDINGS.items():
@@ -366,6 +395,8 @@ class CivClient:
                                 if b_stats["requiredCivic"] and b_stats["requiredCivic"] not in my_civics: continue
                                 if b_stats["requiredBefore"] and b_stats["requiredBefore"] not in city.get("buildings", []): continue
                                 options.append((b_stats["name"], "building", bid))
+                            
+                            self.current_prod_list_len = len(options)
                             
                             for i, (label, cat, internal_name) in enumerate(options):
                                 bx = 834
@@ -389,11 +420,20 @@ class CivClient:
                     grid_x = ((mx + self.camera_x) // self.tile_size) % map_w
                     grid_y = (my - 40 + self.camera_y) // self.tile_size
                     if event.button == 1: # קליק שמאלי - בחירה
-                        if self.target_mode and self.selected_unit_id:
+                        if self.target_mode == "ATTACK" and self.selected_unit_id:
                             # אנחנו במצב מטרה - שולחים פקודת התקפה במקום תנועה
                             self.send_net_msg({
                                 "type": "RANGED_ATTACK",
                                 "unit_id": self.selected_unit_id,
+                                "tx": grid_x, "ty": grid_y
+                            })
+                            self.target_mode = None
+                        elif self.target_mode == "DISTRICT" and self.selected_city_id:
+                            self.send_net_msg({
+                                "type": "CHANGE_PRODUCTION",
+                                "city_id": self.selected_city_id,
+                                "category": "building",
+                                "item": getattr(self, "target_building", None),
                                 "tx": grid_x, "ty": grid_y
                             })
                             self.target_mode = None
@@ -416,21 +456,25 @@ class CivClient:
                                 if not found_city:
                                     self.selected_city_id = None
 
-                    elif event.button == 3 and self.selected_unit_id: # קליק ימני - פקודת תנועה/תקיפה
-                        unit = self.game_state["units"].get(self.selected_unit_id)
-                        if unit and not unit.get("has_moved", False):
-                            self.send_net_msg({
-                                "type": "MOVE_UNIT",
-                                "unit_id": self.selected_unit_id,
-                                "nx": grid_x, "ny": grid_y
-                            })
+                    elif event.button == 3: # קליק ימני - פקודת תנועה/תקיפה או ביטול
+                        if self.target_mode:
+                            self.target_mode = None
+                            self.target_building = None
+                        elif self.selected_unit_id:
+                            unit = self.game_state["units"].get(self.selected_unit_id)
+                            if unit and not unit.get("has_moved", False):
+                                self.send_net_msg({
+                                    "type": "MOVE_UNIT",
+                                    "unit_id": self.selected_unit_id,
+                                    "nx": grid_x, "ny": grid_y
+                                })
                             
                 elif event.type == pygame.MOUSEWHEEL and self.state == "GAME":
                     mx, my = pygame.mouse.get_pos()
                     if self.selected_city_id and mx >= 824 and 40 <= my <= 600:
                         self.city_build_scroll_y += event.y * 20
                         self.city_build_scroll_y = min(0, self.city_build_scroll_y)
-                        num_items = 6
+                        num_items = max(6, getattr(self, 'current_prod_list_len', 6))
                         content_height = num_items * 50 + 20
                         max_scroll = max(0, content_height - 560)
                         self.city_build_scroll_y = max(-max_scroll, self.city_build_scroll_y)
@@ -524,6 +568,20 @@ class CivClient:
                                     pygame.draw.rect(self.screen, imp_color, (screen_x + 8, screen_y + 8, 16, 16))
                                     pygame.draw.rect(self.screen, (0, 0, 0), (screen_x + 8, screen_y + 8, 16, 16), 1)
                                 
+                                district = tile.get("district")
+                                if district:
+                                    d_colors = {
+                                        "campus": (100, 200, 255),
+                                        "holySite": (220, 200, 255),
+                                        "encampment": (200, 100, 50),
+                                        "commercialHub": (255, 215, 0),
+                                        "industrialZone": (210, 130, 40),
+                                        "theaterSquare": (200, 50, 200)
+                                    }
+                                    dc = d_colors.get(district, (150, 150, 150))
+                                    pygame.draw.rect(self.screen, dc, (screen_x + 4, screen_y + 4, self.tile_size - 8, self.tile_size - 8))
+                                    pygame.draw.rect(self.screen, (0, 0, 0), (screen_x + 4, screen_y + 4, self.tile_size - 8, self.tile_size - 8), 2)
+                                
                                 owner = tile.get("owner", -1)
                                 if owner != -1:
                                     p_color = self.game_state.get("players", {}).get(owner, {}).get("color", (255, 255, 255))
@@ -546,6 +604,47 @@ class CivClient:
                                 
                                 pygame.draw.rect(self.screen, (40, 40, 40), (screen_x, screen_y, self.tile_size, self.tile_size), 1)
                 
+                    map_pixel_w = len(self.game_state["map"][0]) * self.tile_size
+                    for cid, city in self.game_state.get("cities", {}).items():
+                        prod_item = city.get("production_item")
+                        if prod_item and prod_item.get("tx") is not None and prod_item.get("ty") is not None:
+                            tx, ty = prod_item["tx"], prod_item["ty"]
+                            screen_tx = (tx * self.tile_size - self.camera_x) % map_pixel_w
+                            if screen_tx > map_pixel_w - self.tile_size: screen_tx -= map_pixel_w
+                            screen_ty = ty * self.tile_size - self.camera_y + 40
+                            if -self.tile_size < screen_tx < 1024 and -self.tile_size < screen_ty < 600:
+                                for i in range(0, self.tile_size, 8):
+                                    pygame.draw.line(self.screen, (255, 255, 0), (screen_tx + i, screen_ty), (screen_tx, screen_ty + i), 2)
+                                    pygame.draw.line(self.screen, (0, 0, 0), (screen_tx + i + 2, screen_ty), (screen_tx, screen_ty + i + 2), 2)
+                                pygame.draw.rect(self.screen, (255, 255, 0), (screen_tx, screen_ty, self.tile_size, self.tile_size), 3)
+
+                    if self.target_mode == "DISTRICT" and self.selected_city_id:
+                        city = self.game_state.get("cities", {}).get(self.selected_city_id)
+                        if city:
+                            map_pixel_w = len(self.game_state["map"][0]) * self.tile_size
+                            target_b = getattr(self, "target_building", "")
+                            for dx in range(-3, 4):
+                                for dy in range(-3, 4):
+                                    tx, ty = (city["x"] + dx) % len(self.game_state["map"][0]), city["y"] + dy
+                                    if 0 <= ty < len(self.game_state["map"]):
+                                        tile = self.game_state["map"][ty][tx]
+                                        if tile.get("owner") == self.my_id and not tile.get("district") and not (tx == city["x"] and ty == city["y"]):
+                                            t_type = tile.get("terrain")
+                                            is_water = GameData.TERRAIN.get(t_type, {}).get("isWater", False)
+                                            if target_b == "harbor":
+                                                if t_type != "coast": continue
+                                            else:
+                                                if is_water or t_type == "mountains": continue
+                                            
+                                            screen_tx = (tx * self.tile_size - self.camera_x) % map_pixel_w
+                                            if screen_tx > map_pixel_w - self.tile_size: screen_tx -= map_pixel_w
+                                            screen_ty = ty * self.tile_size - self.camera_y + 40
+                                            if -self.tile_size < screen_tx < 1024 and -self.tile_size < screen_ty < 600:
+                                                s = pygame.Surface((self.tile_size, self.tile_size), pygame.SRCALPHA)
+                                                s.fill((100, 200, 255, 120))
+                                                self.screen.blit(s, (screen_tx, screen_ty))
+                                                pygame.draw.rect(self.screen, (255, 255, 255), (screen_tx, screen_ty, self.tile_size, self.tile_size), 2)
+
                     # ציור ערים
                     map_w = len(self.game_state["map"][0]) if self.game_state.get("map") else 1
                     map_pixel_w = map_w * self.tile_size
@@ -563,19 +662,46 @@ class CivClient:
                             b_colors = {
                                 "monument": (100, 100, 255),
                                 "granary": (255, 200, 0),
-                                "library": (0, 255, 255),
-                                "waterMill": (50, 50, 200)
+                                "library": (0, 100, 200),
+                                "university": (0, 50, 150),
+                                "shrine": (150, 100, 200),
+                                "temple": (100, 50, 150),
+                                "waterMill": (50, 50, 200),
+                                "barracks": (150, 50, 25),
+                                "market": (200, 180, 0),
+                                "workshop": (150, 80, 20),
+                                "amphitheater": (150, 30, 150)
                             }
                             buildings = city.get("buildings", [])
-                            b_idx = 0
+                            b_placements = {(city["x"], city["y"]): []}
                             for b in buildings:
                                 if b == "cityCenter": continue
-                                bc = b_colors.get(b, (200, 200, 200))
-                                bx = screen_x + 2 + (b_idx * 8) % (self.tile_size - 8)
-                                by = screen_y + self.tile_size - 8
-                                pygame.draw.rect(self.screen, bc, (bx, by, 6, 6))
-                                pygame.draw.rect(self.screen, (0, 0, 0), (bx, by, 6, 6), 1)
-                                b_idx += 1
+                                b_stats = GameData.BUILDINGS.get(b, {})
+                                req = b_stats.get("requiredBefore")
+                                placed = False
+                                if req:
+                                    # Find if there's a district of type 'req' owned by this city
+                                    for ox, oy in city.get("owned_tiles", []):
+                                        if self.game_state["map"][oy][ox].get("district") == req:
+                                            b_placements.setdefault((ox, oy), []).append(b)
+                                            placed = True
+                                            break
+                                if not placed:
+                                    b_placements[(city["x"], city["y"])].append(b)
+                                    
+                            for (bx_tile, by_tile), b_list in b_placements.items():
+                                bx_screen = (bx_tile * self.tile_size - self.camera_x) % map_pixel_w
+                                if bx_screen > map_pixel_w - self.tile_size: bx_screen -= map_pixel_w
+                                by_screen = by_tile * self.tile_size - self.camera_y + 40
+                                
+                                b_idx = 0
+                                for b in b_list:
+                                    bc = b_colors.get(b, (200, 200, 200))
+                                    bx = bx_screen + 2 + (b_idx * 8) % (self.tile_size - 8)
+                                    by = by_screen + self.tile_size - 8
+                                    pygame.draw.rect(self.screen, bc, (bx, by, 6, 6))
+                                    pygame.draw.rect(self.screen, (0, 0, 0), (bx, by, 6, 6), 1)
+                                    b_idx += 1
                             
                             if self.selected_city_id == cid:
                                 pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
@@ -588,34 +714,52 @@ class CivClient:
                                 pygame.draw.rect(self.screen, (0, 200, 0), (screen_x, screen_y - 6, int(self.tile_size * hp_ratio), 4))
 
 
+                    unit_counts = {}
+                    for uid, u in self.game_state["units"].items():
+                        coord = (u["x"], u["y"])
+                        unit_counts[coord] = unit_counts.get(coord, 0) + 1
+                    
+                    drawn_units = {}
+                    
                     for uid, u in self.game_state["units"].items():
                         base_color = self.game_state.get("players", {}).get(u.get("owner", ""), {}).get("color", (255, 255, 255))
                         color = base_color
                         if u["owner"] == self.my_id and u.get("has_moved", False):
                             color = (max(0, base_color[0] - 100), max(0, base_color[1] - 100), max(0, base_color[2] - 100)) # Darker if moved
                         
+                        coord = (u["x"], u["y"])
+                        idx = drawn_units.get(coord, 0)
+                        drawn_units[coord] = idx + 1
+                        
+                        offset_x = (idx * (self.tile_size // 6)) if unit_counts[coord] > 1 else 0
+                        offset_y = (idx * (self.tile_size // 6)) if unit_counts[coord] > 1 else 0
+                        
                         ux_screen = (u["x"] * self.tile_size - self.camera_x) % map_pixel_w
                         if ux_screen > map_pixel_w - self.tile_size: ux_screen -= map_pixel_w
                     
-                        pos = (ux_screen + self.tile_size // 2, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40)
-                        if -32 < pos[0] < 1056 and -32 < pos[1] < 600:
-                            pygame.draw.circle(self.screen, color, pos, 15)
+                        pos = (ux_screen + self.tile_size // 2 + offset_x, u["y"] * self.tile_size - self.camera_y + self.tile_size // 2 + 40 + offset_y)
+                        if -self.tile_size < pos[0] < 1024 + self.tile_size and -self.tile_size < pos[1] < 600 + self.tile_size:
+                            radius = max(4, self.tile_size // 3)
+                            pygame.draw.circle(self.screen, color, pos, radius)
                         
                             u_type = u.get("type", "?")
-                            char_surf = self.font_small.render(u_type[0].upper(), True, (0, 0, 0))
+                            dynamic_font = pygame.font.SysFont("Arial", max(8, self.tile_size // 2))
+                            char_surf = dynamic_font.render(u_type[0].upper(), True, (0, 0, 0))
                             char_rect = char_surf.get_rect(center=pos)
                             self.screen.blit(char_surf, char_rect)
                         
                             # סימון יחידה נבחרת בריבוע לבן
                             if self.selected_unit_id == uid:
-                                pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
+                                pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen + offset_x, u["y"]*self.tile_size - self.camera_y + 40 + offset_y, self.tile_size, self.tile_size), 2)
                                 
                             hp = u.get("hp", 100)
                             max_hp = 100
                             if hp < max_hp:
                                 hp_ratio = max(0, hp / max_hp)
-                                pygame.draw.rect(self.screen, (200, 0, 0), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40 - 6, self.tile_size, 4))
-                                pygame.draw.rect(self.screen, (0, 200, 0), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40 - 6, int(self.tile_size * hp_ratio), 4))
+                                # Adjust Unit HP Bar slightly higher (offset 12 instead of 6) to avoid City HP overlap
+                                hp_y = u["y"]*self.tile_size - self.camera_y + 40 - 12 + offset_y
+                                pygame.draw.rect(self.screen, (200, 0, 0), (ux_screen + offset_x, hp_y, self.tile_size, 4))
+                                pygame.draw.rect(self.screen, (0, 200, 0), (ux_screen + offset_x, hp_y, int(self.tile_size * hp_ratio), 4))
                             
 
                 elif self.active_panel in ["TECH", "CIVIC"]:
@@ -634,7 +778,7 @@ class CivClient:
                     source_dict = GameData.TECHS if is_tech else GameData.CIVICS
                     
                     layout = self.get_tree_layout(source_dict, is_tech)
-                    card_width, card_height = 240, 140
+                    card_width, card_height = 200, 115
                     
                     # Draw connecting lines first
                     for key, (cx, cy) in layout.items():
@@ -644,7 +788,12 @@ class CivClient:
                                 rx, ry = layout[req]
                                 start_pos = (rx + card_width + self.tree_scroll_x, ry + card_height // 2 + self.tree_scroll_y)
                                 end_pos = (cx + self.tree_scroll_x, cy + card_height // 2 + self.tree_scroll_y)
-                                pygame.draw.line(self.screen, (100, 100, 100), start_pos, end_pos, 3)
+                                start_x, start_y = start_pos
+                                end_x, end_y = end_pos
+                                mid_x = start_x + 30
+                                pygame.draw.line(self.screen, (100, 100, 100), (start_x, start_y), (mid_x, start_y), 3)
+                                pygame.draw.line(self.screen, (100, 100, 100), (mid_x, start_y), (mid_x, end_y), 3)
+                                pygame.draw.line(self.screen, (100, 100, 100), (mid_x, end_y), (end_x, end_y), 3)
                     
                     # Draw cards
                     for key, (cx, cy) in layout.items():
@@ -776,11 +925,14 @@ class CivClient:
                                 
                                 self.screen.blit(self.font_small.render(f"Charges: {charges}", True, (200, 200, 200)), (150, 660))
                                 
-                                if not has_imp and charges > 0:
+                                if not has_imp and not tile.get("district") and charges > 0:
                                     possible = []
-                                    if t_type in ["grassland", "plains"]: possible.append(("Farm", "farm"))
-                                    elif t_type in ["hills"]: possible.append(("Mine", "mine"))
-                                    elif t_type in ["coast"]: possible.append(("Fishing Boats", "fishingBoats"))
+                                    me = self.game_state.get("players", {}).get(self.my_id, {})
+                                    my_techs = me.get("techs", [])
+                                    if tile.get("owner") == self.my_id:
+                                        for imp_id, imp_data in GameData.IMPROVEMENTS.items():
+                                            if t_type in imp_data.get("valid_terrains", []) and (not imp_data.get("required_tech") or imp_data["required_tech"] in my_techs):
+                                                possible.append((imp_data["name"], imp_id))
                                     
                                     for idx, (label, imp_id) in enumerate(possible):
                                         bx = 250 + idx * 150
@@ -828,6 +980,20 @@ class CivClient:
                             if u_stats["UpgradeTo"]:
                                 upg_tech = GameData.UNITS[u_stats["UpgradeTo"]]["requiredTech"]
                                 if upg_tech and upg_tech in my_techs: continue
+                                
+                            if u_stats.get("isNaval", False):
+                                has_water = False
+                                if "harbor" in city.get("buildings", []):
+                                    has_water = True
+                                else:
+                                    for ox, oy in city.get("owned_tiles", []):
+                                        if 0 <= oy < len(self.game_state["map"]):
+                                            tt = self.game_state["map"][oy][ox]["terrain"]
+                                            if GameData.TERRAIN.get(tt, {}).get("isWater", False):
+                                                has_water = True
+                                                break
+                                if not has_water: continue
+                                
                             options.append((u_stats["name"], "unit", uid))
                             
                         for bid, b_stats in GameData.BUILDINGS.items():

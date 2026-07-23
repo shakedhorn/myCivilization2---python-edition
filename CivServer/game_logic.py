@@ -231,9 +231,29 @@ class GameState:
                 if tx == city["x"] and ty == city["y"]: return False
                 if self.map[ty][tx].get("district"): return False
                 
+                t_type = self.map[ty][tx]["terrain"]
+                is_water = GameData.TERRAIN[t_type].get("isWater", False)
+                if item_name == "harbor":
+                    if t_type != "coast": return False
+                else:
+                    if is_water or t_type == "mountains": return False
+                
                 city["production_item"] = {"category": category, "name": item_name, "tx": tx, "ty": ty}
                 return True
                 
+        if category == "unit" and GameData.UNITS.get(item_name, {}).get("isNaval", False):
+            has_water = False
+            if "harbor" in city.get("buildings", []):
+                has_water = True
+            else:
+                for ox, oy in city.get("owned_tiles", []):
+                    if 0 <= oy < len(self.map):
+                        tt = self.map[oy][ox]["terrain"]
+                        if GameData.TERRAIN.get(tt, {}).get("isWater", False):
+                            has_water = True
+                            break
+            if not has_water: return False
+            
         city["production_item"] = {"category": category, "name": item_name}
         return True
 
@@ -268,7 +288,10 @@ class GameState:
     def _calculate_city_yields(self, city):
         food, prod, gold, science, culture = 0, 0, 0, 0, 0
         food += 2
-        prod += 2
+        prod += 5
+        pop = city.get("population", 1)
+        science += pop * 0.5
+        culture += pop * 0.3
         
         # Auto-assign worked tiles based on population and yields
         # Calculate yield for each owned tile
@@ -390,6 +413,7 @@ class GameState:
                                 tx, ty = prod_item.get("tx"), prod_item.get("ty")
                                 if tx is not None and ty is not None:
                                     self.map[ty][tx]["district"] = prod_item["name"]
+                                    self.map[ty][tx]["improvement"] = None
                     city["production_item"] = None
                     
         for p_id, p in self.players.items():
@@ -423,10 +447,16 @@ class GameState:
             u["has_moved"] = False
 
     def _get_unit_at(self, x, y):
+        from CivShared.game_defs import GameData
+        civ_uid, civ_unit = None, None
         for uid, unit in self.units.items():
             if unit["x"] == x and unit["y"] == y:
-                return uid, unit
-        return None, None
+                stats = GameData.UNITS[unit["type"]]
+                if stats.get("melee", 0) > 0 or stats.get("range", 0) > 0:
+                    return uid, unit
+                else:
+                    civ_uid, civ_unit = uid, unit
+        return civ_uid, civ_unit
 
     def _move_unit(self, p_id, data):
         u_id = str(data.get("unit_id"))
@@ -476,11 +506,26 @@ class GameState:
             city["hp"] = city.get("hp", 200) - damage_to_def
             unit["hp"] = unit.get("hp", 100) - damage_to_att
             
+            old_owner = city["owner"]
+            
             if city["hp"] <= 0:
                 city["owner"] = p_id
                 city["hp"] = 100 # Heal slightly upon capture
                 unit["x"], unit["y"] = nx, ny
                 
+                for ox, oy in city.get("owned_tiles", []):
+                    if 0 <= oy < self.height and 0 <= ox < self.width:
+                        self.map[oy][ox]["owner"] = p_id
+                        
+                has_cities = any(c["owner"] == old_owner for c in self.cities.values())
+                if not has_cities:
+                    if old_owner in self.players:
+                        self.players[old_owner]["eliminated"] = True
+                    
+                    active_players = [pid for pid, p in self.players.items() if not p.get("eliminated")]
+                    if len(active_players) == 1:
+                        self.players[active_players[0]]["winner"] = "Domination"
+                        
             if unit["hp"] <= 0:
                 if u_id in self.units: del self.units[u_id]
                 
