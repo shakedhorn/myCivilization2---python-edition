@@ -56,7 +56,40 @@ class GameServer:
                     self.game.next_unit_id += 1
 
     def filter_fow(self, state, player_id):
-        # Placeholder for Fog of War filtering
+        if not getattr(self, "game_started", False):
+            return state
+
+        visible_tiles = self.game.get_visible_tiles(player_id)
+        
+        p = self.game.players.get(player_id)
+        explored_tiles = set(tuple(x) for x in getattr(p, 'explored_tiles', [])) if p else set()
+        
+        for y, row in enumerate(state.get("world", {}).get("map_data", [])):
+            for x, tile in enumerate(row):
+                coord = (x, y)
+                if coord in visible_tiles:
+                    tile["visibility"] = "visible"
+                elif coord in explored_tiles:
+                    tile["visibility"] = "fog"
+                else:
+                    tile["visibility"] = "unexplored"
+                    tile["terrain"] = "unknown"
+                    tile["owner"] = -1
+                    tile["improvement"] = None
+                    tile["district"] = None
+                    
+        visible_units = {}
+        for uid, u in state.get("units", {}).items():
+            if (u["x"], u["y"]) in visible_tiles:
+                visible_units[uid] = u
+        state["units"] = visible_units
+        
+        visible_cities = {}
+        for cid, c in state.get("cities", {}).items():
+            if (c["x"], c["y"]) in visible_tiles or (c["x"], c["y"]) in explored_tiles:
+                visible_cities[cid] = c
+        state["cities"] = visible_cities
+        
         return state
 
     def handle_client(self, conn, addr):

@@ -24,6 +24,12 @@ class Renderer:
         self.font_main = pygame.font.SysFont("Arial", 32, bold=True)
         self.font_small = pygame.font.SysFont("Arial", 20)
         self.surface_cache = {}
+        self.fonts_cache = {}
+
+    def get_dynamic_font(self, size):
+        if size not in self.fonts_cache:
+            self.fonts_cache[size] = pygame.font.SysFont("Arial", size, bold=True)
+        return self.fonts_cache[size]
 
     def get_cached_text(self, text, font, color, shadow=True):
         key = (text, font, color, shadow)
@@ -120,7 +126,7 @@ class Renderer:
 
     def render_map(self):
         app = self.app
-        map_data = app.game_state["map"]
+        map_data = app.game_state.get("world", {}).get("map_data", app.game_state.get("map", []))
         map_h = len(map_data)
         if map_h == 0: return
         map_w = len(map_data[0])
@@ -142,8 +148,19 @@ class Renderer:
                 if screen_x > map_pixel_w - app.tile_size: screen_x -= map_pixel_w
                 screen_y = y * app.tile_size - app.camera_y + 40
                 
+                vis = tile.get("visibility", "visible")
+                
+                if vis == "unexplored":
+                    pygame.draw.rect(self.screen, (0, 0, 0), (screen_x, screen_y, app.tile_size, app.tile_size))
+                    continue
+                    
                 color = TERRAIN_COLORS.get(tile["terrain"], (255, 0, 255))
                 pygame.draw.rect(self.screen, color, (screen_x, screen_y, app.tile_size, app.tile_size))
+                
+                if vis == "fog":
+                    fog_surf = pygame.Surface((app.tile_size, app.tile_size), pygame.SRCALPHA)
+                    fog_surf.fill((0, 0, 0, 150))
+                    self.screen.blit(fog_surf, (screen_x, screen_y))
                 
                 imp = tile.get("improvement")
                 if imp:
@@ -312,8 +329,8 @@ class Renderer:
                 # Instead of making a font every time, we should cache it or just reuse font_small
                 # I'll just use font_small for simplicity if it fits, else cache it.
                 # Just draw it fast
-                dynamic_font = pygame.font.SysFont("Arial", font_size)
-                char_surf = dynamic_font.render(u_type[0].upper(), True, (0, 0, 0))
+                dynamic_font = self.get_dynamic_font(font_size)
+                char_surf, _ = self.get_cached_text(u_type[0].upper(), dynamic_font, (0, 0, 0), shadow=False)
                 char_rect = char_surf.get_rect(center=pos)
                 self.screen.blit(char_surf, char_rect)
             

@@ -104,6 +104,46 @@ class GameLogic:
                         
         return map_data
 
+
+    def get_visible_tiles(self, player_id):
+        visible = set()
+        
+        for uid, u in self.units.items():
+            if u.owner == player_id:
+                sight = 2
+                stats = GameData.UNITS.get(u.type)
+                if stats and "sight" in stats:
+                    sight = stats["sight"]
+                elif u.type == "scout": sight = 3
+                
+                for dy in range(-sight, sight + 1):
+                    for dx in range(-sight, sight + 1):
+                        if dx*dx + dy*dy <= sight*sight:
+                            nx = (u.x + dx) % self.world.width
+                            ny = u.y + dy
+                            if 0 <= ny < self.world.height:
+                                visible.add((nx, ny))
+                                
+        for cid, c in self.cities.items():
+            if c.owner == player_id:
+                sight = 2
+                for dy in range(-sight, sight + 1):
+                    for dx in range(-sight, sight + 1):
+                        if dx*dx + dy*dy <= sight*sight:
+                            nx = (c.x + dx) % self.world.width
+                            ny = c.y + dy
+                            if 0 <= ny < self.world.height:
+                                visible.add((nx, ny))
+                                
+        p = self.players.get(player_id)
+        if p:
+            if not hasattr(p, 'explored_tiles'): p.explored_tiles = []
+            explored_set = set(tuple(x) for x in p.explored_tiles)
+            explored_set.update(visible)
+            p.explored_tiles = list(explored_set)
+            
+        return visible
+
     def to_json(self):
         """מחזיר את כל מצב המשחק בצורה שניתן להפוך ל-JSON"""
         return {

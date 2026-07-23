@@ -16,6 +16,7 @@ class Player:
         self.last_culture_income = 1
         self.eliminated = False
         self.winner = None
+        self.explored_tiles = []
 
     def to_json(self):
         return self.__dict__.copy()
