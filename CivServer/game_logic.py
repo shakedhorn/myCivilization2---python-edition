@@ -131,6 +131,8 @@ class GameState:
             return self._choose_civic(player_id, data)
         elif cmd_type == "RANGED_ATTACK":
             return self._ranged_attack(player_id, data)
+        elif cmd_type == "FORTIFY_HEAL":
+            return self._fortify_heal(player_id, data)
         # כאן יכנסו כל שאר הפקודות (BUILD_BUILDING, ADOPT_CIVIC וכו')
         return False
         
@@ -189,6 +191,12 @@ class GameState:
             
         x, y = unit["x"], unit["y"]
         tile = self.map[y][x]
+        
+        # Check valid_terrains
+        if tile["terrain"] not in imp_data.get("valid_terrains", []): return False
+        
+        if tile.get("owner") != p_id: return False
+        
         if tile.get("improvement"): return False
         
         tile["improvement"] = imp_type
@@ -209,9 +217,36 @@ class GameState:
         category = data.get("category")
         item_name = data.get("item")
         
+        if category == "building":
+            stats = GameData.BUILDINGS.get(item_name, {})
+            if stats.get("requiresTile", False):
+                tx = data.get("tx")
+                ty = data.get("ty")
+                if tx is None or ty is None: return False
+                
+                # Verify tile is owned by this city/player
+                if [tx, ty] not in [list(t) for t in city.get("owned_tiles", [])] and (tx, ty) not in city.get("owned_tiles", []): return False
+                
+                # Verify it's not the city center or already occupied
+                if tx == city["x"] and ty == city["y"]: return False
+                if self.map[ty][tx].get("district"): return False
+                
+                city["production_item"] = {"category": category, "name": item_name, "tx": tx, "ty": ty}
+                return True
+                
         city["production_item"] = {"category": category, "name": item_name}
         return True
 
+    def _fortify_heal(self, p_id, data):
+        u_id = str(data.get("unit_id"))
+        unit = self.units.get(u_id)
+        if unit and unit["owner"] == p_id and not unit.get("has_moved", False):
+            unit["has_moved"] = True
+            # Heal 15 HP
+            unit["hp"] = min(100, unit.get("hp", 100) + 15)
+            return True
+        return False
+        
     def _skip_unit_turn(self, p_id, data):
         u_id = str(data.get("unit_id"))
         unit = self.units.get(u_id)
@@ -350,6 +385,11 @@ class GameState:
                     elif prod_item["category"] == "building":
                         if prod_item["name"] not in city.get("buildings", []):
                             city.setdefault("buildings", []).append(prod_item["name"])
+                            stats = GameData.BUILDINGS.get(prod_item["name"], {})
+                            if stats.get("requiresTile", False):
+                                tx, ty = prod_item.get("tx"), prod_item.get("ty")
+                                if tx is not None and ty is not None:
+                                    self.map[ty][tx]["district"] = prod_item["name"]
                     city["production_item"] = None
                     
         for p_id, p in self.players.items():
@@ -414,7 +454,40 @@ class GameState:
         if not is_water and stats["isNaval"]: return False
         if target_terrain == "mountains": return False
 
-        # 3. בדיקה אם יש שם יחידה אחרת
+        # 3. בדיקת עיר (Must check city before unit to prevent Trojan Horse capture)
+        target_city_id = None
+        for cid, city in self.cities.items():
+            if city["x"] == nx and city["y"] == ny:
+                target_city_id = cid
+                break
+                
+        if target_city_id:
+            city = self.cities[target_city_id]
+            if city["owner"] == p_id: return False # לא יכולים לתקוף עיר שלנו
+            
+            att_stats = GameData.UNITS[unit["type"]]
+            # עיר בסיסית - הגנה 20, עם חומות יותר
+            city_def = 20
+            if "walls" in city.get("buildings", []): city_def = 40
+            
+            damage_to_def = max(10, att_stats["melee"] - (city_def // 2))
+            damage_to_att = max(5, city_def - (att_stats["melee"] // 2))
+            
+            city["hp"] = city.get("hp", 200) - damage_to_def
+            unit["hp"] = unit.get("hp", 100) - damage_to_att
+            
+            if city["hp"] <= 0:
+                city["owner"] = p_id
+                city["hp"] = 100 # Heal slightly upon capture
+                unit["x"], unit["y"] = nx, ny
+                
+            if unit["hp"] <= 0:
+                if u_id in self.units: del self.units[u_id]
+                
+            unit["has_moved"] = True
+            return True
+
+        # 4. בדיקה אם יש שם יחידה אחרת
         target_uid, target_unit = self._get_unit_at(nx, ny)
         
         if target_unit:
@@ -431,9 +504,6 @@ class GameState:
                 success = self._resolve_melee_combat(u_id, target_uid)
                 unit["has_moved"] = True
                 return success
-
-        # 4. בדיקת עיר
-        # (כאן תוסיף בדיקה אם יש עיר ב-nx,ny ותפעיל לוגיקת מצור)
 
         # תנועה רגילה
         unit["x"], unit["y"] = nx, ny
@@ -518,17 +588,42 @@ class GameState:
         if dist_x > rng or dist_y > rng: return False
         
         target_uid, target_unit = self._get_unit_at(tx, ty)
-        if not target_unit: return False
-        if target_unit["owner"] == p_id: return False
         
-        # Apply damage
-        def_stats = GameData.UNITS.get(target_unit["type"], {})
-        
-        damage_to_def = max(10, stats["melee"] - (def_stats["melee"] // 2))
-        target_unit["hp"] = target_unit.get("hp", 100) - damage_to_def
-        
-        if target_unit["hp"] <= 0:
-            del self.units[target_uid]
+        if target_unit:
+            if target_unit["owner"] == p_id: return False
             
-        unit["has_moved"] = True
-        return True
+            # Apply damage
+            def_stats = GameData.UNITS.get(target_unit["type"], {})
+            damage_to_def = max(10, stats["melee"] - (def_stats["melee"] // 2))
+            target_unit["hp"] = target_unit.get("hp", 100) - damage_to_def
+            
+            if target_unit["hp"] <= 0:
+                del self.units[target_uid]
+                
+            unit["has_moved"] = True
+            return True
+            
+        target_city_id = None
+        for cid, city in self.cities.items():
+            if city["x"] == tx and city["y"] == ty:
+                target_city_id = cid
+                break
+                
+        if target_city_id:
+            city = self.cities[target_city_id]
+            if city["owner"] == p_id: return False
+            
+            city_def = 20
+            if "walls" in city.get("buildings", []): city_def = 40
+            
+            damage_to_def = max(10, stats["melee"] - (city_def // 2))
+            city["hp"] = city.get("hp", 200) - damage_to_def
+            
+            if city["hp"] <= 0:
+                city["owner"] = p_id
+                city["hp"] = 100
+                
+            unit["has_moved"] = True
+            return True
+            
+        return False

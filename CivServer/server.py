@@ -10,7 +10,28 @@ class GameServer:
         self.port = port
         self.clients = {}
         self.game = GameState(width=50, height=36)
-        self.lock = threading.Lock()
+        self.game_started = False
+        self.lock = threading.RLock()
+
+    def _check_start_game(self):
+        with self.lock:
+            if not self.game_started and len(self.game.players) >= 2:
+                self.game_started = True
+                for p_id in self.game.players:
+                    # Find a valid land tile for starting spawn
+                    spawn_x, spawn_y = 5, 5
+                    for _ in range(100):
+                        sx, sy = random.randint(2, self.game.width - 3), random.randint(2, self.game.height - 3)
+                        if self.game.map[sy][sx]["terrain"] not in ["ocean", "coast", "mountains"]:
+                            spawn_x, spawn_y = sx, sy
+                            break
+                            
+                    # יצירת Settler התחלתי לשחקן
+                    self.game.units[str(self.game.next_unit_id)] = {
+                        "type": "settler", "owner": p_id, "x": spawn_x, 
+                        "y": spawn_y, "hp": 100, "has_moved": False
+                    }
+                    self.game.next_unit_id += 1
 
     def handle_client(self, conn, addr):
         player_id = None
@@ -52,20 +73,7 @@ class GameServer:
                             "current_civic": None, "civic_progress": 0,
                             "color": assigned_color
                         }
-                        # Find a valid land tile for starting spawn
-                        spawn_x, spawn_y = 5, 5
-                        for _ in range(100):
-                            sx, sy = random.randint(2, self.game.width - 3), random.randint(2, self.game.height - 3)
-                            if self.game.map[sy][sx]["terrain"] not in ["ocean", "coast", "mountains"]:
-                                spawn_x, spawn_y = sx, sy
-                                break
-                                
-                        # יצירת Settler התחלתי לשחקן חדש
-                        self.game.units[str(self.game.next_unit_id)] = {
-                            "type": "settler", "owner": player_id, "x": spawn_x, 
-                            "y": spawn_y, "hp": 100, "has_moved": False
-                        }
-                        self.game.next_unit_id += 1
+
                 
                 conn.sendall(json.dumps({"status": "LOGIN_OK", "id": player_id}).encode())
             else:
@@ -85,7 +93,9 @@ class GameServer:
                 cmd = msg.get("type")
                 with self.lock:
                     if cmd == "UPDATE_ALL":
+                        self._check_start_game()
                         sync_data = self.game.get_sync_data()
+                        sync_data["game_started"] = getattr(self, "game_started", False)
                         resp = json.dumps(sync_data).encode()
                         conn.sendall(len(resp).to_bytes(4, 'big') + resp)
                     
@@ -97,7 +107,7 @@ class GameServer:
                         if success:
                             print(f"City built successfully for {player_id}")
                             
-                    elif cmd in ["END_TURN", "SKIP_UNIT_TURN", "RANGED_ATTACK", "CHANGE_PRODUCTION", "BUILD_IMPROVEMENT", "CHOOSE_RESEARCH", "CHOOSE_CIVIC"]:
+                    elif cmd in ["END_TURN", "SKIP_UNIT_TURN", "FORTIFY_HEAL", "RANGED_ATTACK", "CHANGE_PRODUCTION", "BUILD_IMPROVEMENT", "CHOOSE_RESEARCH", "CHOOSE_CIVIC"]:
                         self.game.handle_command(player_id, cmd, msg)
 
         except Exception as e:

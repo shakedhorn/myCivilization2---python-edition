@@ -41,7 +41,7 @@ class CivClient:
         self.camera_x = 0
         self.camera_y = 0
         self.tile_size = 32
-        self.target_mode = False
+        self.target_mode = None
         self.start_time = time.time()
         self.games_list = []
         self.city_build_scroll_y = 0
@@ -49,6 +49,7 @@ class CivClient:
         self.tree_scroll_y = 0
         self.tree_scroll_x = 0
         self.server_ip = ""
+        self.clock = pygame.time.Clock()
 
 
     def get_tree_layout(self, items_dict, is_tech):
@@ -217,11 +218,11 @@ class CivClient:
                         else:
                             self.input_text = "ERROR: " + resp.get("message", "FAILED")
                     elif event.key == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
-                    elif event.key == pygame.K_SPACE and self.state == "GAME":
+                    elif event.key == pygame.K_SPACE and self.state == "GAME" and self.game_state and self.game_state.get("game_started", False):
                         if self.selected_unit_id:
                             self.send_net_msg({"type": "SKIP_UNIT_TURN", "unit_id": self.selected_unit_id})
                     else: self.input_text += event.unicode
-                elif event.type == pygame.MOUSEMOTION and self.state == "GAME":
+                elif event.type == pygame.MOUSEMOTION and self.state == "GAME" and self.game_state and self.game_state.get("game_started", False):
                     if event.buttons[0] or event.buttons[1] or event.buttons[2]: # Any mouse button held
                         self.camera_x -= event.rel[0]
                         self.camera_y -= event.rel[1]
@@ -235,7 +236,7 @@ class CivClient:
                             self.camera_x %= map_pixel_w
                             self.camera_y = max(0, min(self.camera_y, max_y))
                             
-                elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME":
+                elif event.type == pygame.MOUSEBUTTONDOWN and self.state == "GAME" and self.game_state and self.game_state.get("game_started", False):
                     mx, my = pygame.mouse.get_pos()
                     
                     if my < 40:
@@ -288,7 +289,7 @@ class CivClient:
                                     elif unit_info.get("range", 0) > 0:
                                         btn_rect = pygame.Rect(250, 620, 150, 40)
                                         if btn_rect.collidepoint(mx, my):
-                                            self.target_mode = not self.target_mode
+                                            self.target_mode = None if self.target_mode == "ATTACK" else "ATTACK"
                                     elif unit_info.get("name") == "Builder":
                                         ux, uy = unit["x"], unit["y"]
                                         tile = self.game_state["map"][uy][ux]
@@ -298,9 +299,12 @@ class CivClient:
                                         
                                         if not has_imp and charges > 0:
                                             possible = []
-                                            if t_type in ["grassland", "plains"]: possible.append(("Farm", "farm"))
-                                            elif t_type in ["hills"]: possible.append(("Mine", "mine"))
-                                            elif t_type in ["coast"]: possible.append(("Fishing Boats", "fishingBoats"))
+                                            me = self.game_state.get("players", {}).get(self.my_id, {})
+                                            my_techs = me.get("techs", [])
+                                            if tile.get("owner") == self.my_id:
+                                                for imp_id, imp_data in GameData.IMPROVEMENTS.items():
+                                                    if t_type in imp_data.get("valid_terrains", []) and (not imp_data.get("required_tech") or imp_data["required_tech"] in my_techs):
+                                                        possible.append((imp_data["name"], imp_id))
                                             
                                             for idx, (label, imp_id) in enumerate(possible):
                                                 bx = 250 + idx * 150
@@ -368,12 +372,16 @@ class CivClient:
                                 by = 90 + i * 50 + self.city_build_scroll_y
                                 brect = pygame.Rect(bx, by, 180, 40)
                                 if brect.collidepoint(mx, my):
-                                    self.send_net_msg({
-                                        "type": "CHANGE_PRODUCTION",
-                                        "city_id": self.selected_city_id,
-                                        "category": cat,
-                                        "item": internal_name
-                                    })
+                                    if cat == "building" and GameData.BUILDINGS.get(internal_name, {}).get("requiresTile", False):
+                                        self.target_mode = "DISTRICT"
+                                        self.target_building = internal_name
+                                    else:
+                                        self.send_net_msg({
+                                            "type": "CHANGE_PRODUCTION",
+                                            "city_id": self.selected_city_id,
+                                            "category": cat,
+                                            "item": internal_name
+                                        })
                         continue
                         
                     # המרת קואורדינטות עכבר לאריחי מפה (כולל המצלמה)
@@ -388,7 +396,7 @@ class CivClient:
                                 "unit_id": self.selected_unit_id,
                                 "tx": grid_x, "ty": grid_y
                             })
-                            self.target_mode = False
+                            self.target_mode = None
                         else:
                             found_unit = False
                             for uid, unit in self.game_state["units"].items():
@@ -487,6 +495,15 @@ class CivClient:
                         self.draw_text_centered(g, y_offset, self.font_small, (200, 200, 200))
 
             elif self.state == "GAME" and self.game_state:
+                if not self.game_state.get("game_started", False):
+                    pygame.draw.rect(self.screen, (30, 60, 100), (0, 0, 1024, 768))
+                    self.draw_minecraft_box(312, 284, 400, 200, "WAITING FOR PLAYERS")
+                    self.draw_text_centered(f"Connected: {len(self.game_state.get('players', {}))} / 2+", 360, self.font_small, (200, 200, 200), shadow=False)
+                    self.draw_text_centered("The game will start automatically.", 400, self.font_small, (150, 150, 150), shadow=False)
+                    pygame.display.flip()
+                    self.clock.tick(30)
+                    continue
+                
                 if self.active_panel == "MAP":
                     # ציור המפה והיחידות (כפי שעשינו קודם)
                     for y, row in enumerate(self.game_state["map"]):
@@ -562,6 +579,13 @@ class CivClient:
                             
                             if self.selected_city_id == cid:
                                 pygame.draw.rect(self.screen, (255, 255, 255), (screen_x, screen_y, self.tile_size, self.tile_size), 3)
+                                
+                            hp = city.get("hp", 200)
+                            max_hp = 200
+                            if hp < max_hp:
+                                hp_ratio = max(0, hp / max_hp)
+                                pygame.draw.rect(self.screen, (200, 0, 0), (screen_x, screen_y - 6, self.tile_size, 4))
+                                pygame.draw.rect(self.screen, (0, 200, 0), (screen_x, screen_y - 6, int(self.tile_size * hp_ratio), 4))
 
 
                     for uid, u in self.game_state["units"].items():
@@ -585,6 +609,13 @@ class CivClient:
                             # סימון יחידה נבחרת בריבוע לבן
                             if self.selected_unit_id == uid:
                                 pygame.draw.rect(self.screen, (255, 255, 255), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40, self.tile_size, self.tile_size), 2)
+                                
+                            hp = u.get("hp", 100)
+                            max_hp = 100
+                            if hp < max_hp:
+                                hp_ratio = max(0, hp / max_hp)
+                                pygame.draw.rect(self.screen, (200, 0, 0), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40 - 6, self.tile_size, 4))
+                                pygame.draw.rect(self.screen, (0, 200, 0), (ux_screen, u["y"]*self.tile_size - self.camera_y + 40 - 6, int(self.tile_size * hp_ratio), 4))
                             
 
                 elif self.active_panel in ["TECH", "CIVIC"]:
@@ -735,7 +766,7 @@ class CivClient:
                                 pygame.draw.rect(self.screen, (200, 50, 50) if self.target_mode else (100, 100, 100), btn_rect)
                                 self.screen.blit(self.font_small.render("Target (R)", True, (255,255,255)), (260, 630))
                                 if pygame.key.get_pressed()[pygame.K_r]:
-                                    self.target_mode = True
+                                    self.target_mode = "ATTACK"
                             elif unit_info.get("name") == "Builder":
                                 ux, uy = unit["x"], unit["y"]
                                 tile = self.game_state["map"][uy][ux]
@@ -885,7 +916,23 @@ class CivClient:
                 self.camera_x %= map_pixel_w
                 self.camera_y = max(0, min(self.camera_y, max_y))
 
+            if self.state == "GAME" and self.game_state:
+                me = self.game_state.get("players", {}).get(self.my_id, {})
+                if me.get("eliminated"):
+                    s = pygame.Surface((1024, 768), pygame.SRCALPHA)
+                    s.fill((100, 0, 0, 200))
+                    self.screen.blit(s, (0, 0))
+                    self.draw_text_centered("DEFEAT", 300, self.font_title, (255, 50, 50))
+                    self.draw_text_centered("Your civilization has been destroyed.", 400, self.font_main, (200, 200, 200))
+                elif me.get("winner"):
+                    s = pygame.Surface((1024, 768), pygame.SRCALPHA)
+                    s.fill((0, 100, 0, 200))
+                    self.screen.blit(s, (0, 0))
+                    self.draw_text_centered("VICTORY", 300, self.font_title, (50, 255, 50))
+                    self.draw_text_centered(f"You achieved a {me.get('winner')} Victory!", 400, self.font_main, (200, 200, 200))
+
             pygame.display.flip()
+            self.clock.tick(30)
         pygame.quit()
 
 if __name__ == "__main__":
