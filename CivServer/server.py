@@ -2,14 +2,36 @@ import socket
 import json
 import threading
 import random
+import hashlib
+import copy
 from CivShared.game_defs import *
-from CivServer.game_logic import GameState
+from CivServer.game_logic import GameLogic
+
+def dict_diff(old, new):
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return new if old != new else None
+    diff = {}
+    for k, v in new.items():
+        if k not in old:
+            diff[k] = v
+        else:
+            if isinstance(v, dict) and isinstance(old[k], dict):
+                d = dict_diff(old[k], v)
+                if d is not None:
+                    diff[k] = d
+            else:
+                if old[k] != v:
+                    diff[k] = v
+    for k in old:
+        if k not in new:
+            diff[k] = "__DELETE__"
+    return diff if diff else None
 
 class GameServer:
     def __init__(self, port=54321):
         self.port = port
         self.clients = {}
-        self.game = GameState(width=50, height=36)
+        self.game = GameLogic(width=50, height=36)
         self.game_started = False
         self.lock = threading.RLock()
 
@@ -21,22 +43,29 @@ class GameServer:
                     # Find a valid land tile for starting spawn
                     spawn_x, spawn_y = 5, 5
                     for _ in range(100):
-                        sx, sy = random.randint(2, self.game.width - 3), random.randint(2, self.game.height - 3)
-                        if self.game.map[sy][sx]["terrain"] not in ["ocean", "coast", "mountains"]:
+                        sx, sy = random.randint(2, self.game.world.width - 3), random.randint(2, self.game.world.height - 3)
+                        tile = self.game.world.tiles[sy][sx]
+                        if tile.terrain not in ["ocean", "coast", "mountains"]:
                             spawn_x, spawn_y = sx, sy
                             break
                             
-                    # יצירת Settler התחלתי לשחקן
-                    self.game.units[str(self.game.next_unit_id)] = {
-                        "type": "settler", "owner": p_id, "x": spawn_x, 
-                        "y": spawn_y, "hp": 100, "has_moved": False
-                    }
+                    # Spawn initial settler
+                    unit_id = str(self.game.next_unit_id)
+                    from CivServer.models.unit import Unit
+                    self.game.units[unit_id] = Unit(unit_id, "settler", p_id, spawn_x, spawn_y)
                     self.game.next_unit_id += 1
+
+    def filter_fow(self, state, player_id):
+        # Placeholder for Fog of War filtering
+        return state
 
     def handle_client(self, conn, addr):
         player_id = None
+        last_state = {}
+        last_turn = -1
+
         try:
-            # שלב 1: LOGIN
+            # Login
             raw_len = conn.recv(4)
             if not raw_len: return
             msg_len = int.from_bytes(raw_len, byteorder='big')
@@ -49,38 +78,28 @@ class GameServer:
             
             if login_msg.get("type") == "LOGIN":
                 username = login_msg.get("user", "Unknown")
-                # המרה ל-string כדי למנוע בלבול במפתחות של JSON
                 player_id = str(abs(hash(username)) % 1000)
                 
                 with self.lock:
                     if player_id not in self.game.players:
                         available_colors = [
-                            (255, 50, 50),   # Red
-                            (50, 50, 255),   # Blue
-                            (50, 255, 50),   # Green
-                            (255, 255, 50),  # Yellow
-                            (255, 50, 255),  # Purple
-                            (50, 255, 255),  # Cyan
-                            (255, 150, 50),  # Orange
-                            (255, 255, 255), # White
+                            (255, 50, 50),   (50, 50, 255),   (50, 255, 50),
+                            (255, 255, 50),  (255, 50, 255),  (50, 255, 255),
+                            (255, 150, 50),  (255, 255, 255),
                         ]
                         assigned_color = available_colors[len(self.game.players) % len(available_colors)]
                         
-                        self.game.players[player_id] = {
-                            "name": username, "gold": 50, "science": 0, "culture": 0, "production": 0,
-                            "techs": [], "civics": [], "ended_turn": False,
-                            "current_research": None, "research_progress": 0,
-                            "current_civic": None, "civic_progress": 0,
-                            "color": assigned_color
-                        }
-
+                        from CivServer.models.player import Player
+                        new_player = Player(player_id, username, assigned_color)
+                        new_player.gold = 50
+                        self.game.players[player_id] = new_player
                 
                 conn.sendall(json.dumps({"status": "LOGIN_OK", "id": player_id}).encode())
             else:
                 conn.sendall(json.dumps({"status": "ERROR"}).encode())
                 return
 
-            # שלב 2: לולאת המשחק
+            # Game Loop
             while True:
                 raw_len = conn.recv(4)
                 if not raw_len: break
@@ -91,13 +110,41 @@ class GameServer:
                 
                 msg = json.loads(data.decode())
                 cmd = msg.get("type")
+                
                 with self.lock:
                     if cmd == "UPDATE_ALL":
                         self._check_start_game()
-                        sync_data = self.game.get_sync_data()
-                        sync_data["game_started"] = getattr(self, "game_started", False)
-                        resp = json.dumps(sync_data).encode()
+                        current_state = self.game.to_json()
+                        current_state["game_started"] = getattr(self, "game_started", False)
+                        
+                        # Apply FoW
+                        current_state = self.filter_fow(current_state, player_id)
+                        
+                        if current_state["turn"] > last_turn:
+                            # Send Checksum
+                            state_str = json.dumps(current_state, sort_keys=True)
+                            chk = hashlib.md5(state_str.encode()).hexdigest()
+                            resp = json.dumps({"type": "CHECKSUM", "turn": current_state["turn"], "hash": chk}).encode()
+                            last_turn = current_state["turn"]
+                            last_state = copy.deepcopy(current_state)
+                        else:
+                            # Send Delta
+                            delta = dict_diff(last_state, current_state)
+                            if delta is None: delta = {}
+                            resp = json.dumps({"type": "DELTA", "data": delta}).encode()
+                            last_state = copy.deepcopy(current_state)
+                            
                         conn.sendall(len(resp).to_bytes(4, 'big') + resp)
+
+                    elif cmd == "REQUEST_FULL_STATE":
+                        with self.lock:
+                            current_state = self.game.to_json()
+                            current_state["game_started"] = getattr(self, "game_started", False)
+                            current_state = self.filter_fow(current_state, player_id)
+                            resp = json.dumps({"type": "FULL_STATE", "data": current_state}).encode()
+                            last_state = copy.deepcopy(current_state)
+                            last_turn = current_state["turn"]
+                            conn.sendall(len(resp).to_bytes(4, 'big') + resp)
                     
                     elif cmd == "MOVE_UNIT":
                         self.game.handle_command(player_id, "MOVE_UNIT", msg)
@@ -114,10 +161,10 @@ class GameServer:
             print(f"Error with player {player_id}: {e}")
         finally:
             if player_id and player_id in self.game.players:
-                self.game.players[player_id]["eliminated"] = True
-                active_players = [p_id for p_id, p in self.game.players.items() if not p.get("eliminated")]
+                self.game.players[player_id].eliminated = True
+                active_players = [p_id for p_id, p in self.game.players.items() if not p.eliminated]
                 if len(active_players) == 1:
-                    self.game.players[active_players[0]]["winner"] = "Domination"
+                    self.game.players[active_players[0]].winner = "Domination"
             conn.close()
 
     def start(self):
